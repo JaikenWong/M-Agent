@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from .config_models import AgentConfig, AppConfig, ModelConfig, WorkflowConfig
+from .doctor import format_doctor_report, run_doctor
 from .settings_loader import default_model_config, find_claude_settings
 from .templates import describe_templates, instantiate_template, template_names
 
@@ -72,6 +73,12 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_doctor(args: argparse.Namespace) -> int:
+    report = format_doctor_report(run_doctor(args.config))
+    print(report)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser("magent-tui", description="多智能体协作 TUI")
     sub = p.add_subparsers(dest="cmd")
@@ -87,6 +94,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_tpl = sub.add_parser("templates", help="列出所有内置模板")
     p_tpl.set_defaults(func=cmd_templates)
+
+    p_doctor = sub.add_parser("doctor", help="检查依赖、配置与模型环境")
+    p_doctor.add_argument("-c", "--config", help="YAML 配置路径")
+    p_doctor.set_defaults(func=cmd_doctor)
 
     return p
 
