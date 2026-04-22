@@ -1,6 +1,8 @@
 """magent-tui: 基于 AutoGen + Textual 的多智能体协作 TUI。"""
 
 from .config_models import AgentConfig, AppConfig, ModelConfig, WorkflowConfig
+from .run_events import RunEvent
+from .run_service import RunService
 from .templates import TEMPLATE_LIBRARY, instantiate_template, template_names
 
 __all__ = [
@@ -8,6 +10,8 @@ __all__ = [
     "AppConfig",
     "ModelConfig",
     "WorkflowConfig",
+    "RunEvent",
+    "RunService",
     "TEMPLATE_LIBRARY",
     "instantiate_template",
     "template_names",

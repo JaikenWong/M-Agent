@@ -38,9 +38,10 @@ from textual.widgets import (
     TextArea,
 )
 
-from .artifacts import RunArtifacts
 from .config_models import AgentConfig, AppConfig
-from .orchestrator import AgentMessage, OrchestratorBase, build_orchestrator
+from .orchestrator import AgentMessage
+from .run_events import RunEvent
+from .run_service import RunService
 from .settings_loader import default_model_config, model_from_claude_settings
 from .templates import describe_templates, instantiate_template
 
@@ -565,26 +566,42 @@ class MAgentApp(App):
         self._running = True
         self.status_text = "运行中..."
         self._log_system(f"📋 **任务**: {task}")
-        artifacts = RunArtifacts.start(self.config, task)
-        self._log_system(f"🗂 本次运行目录: `{artifacts.run_dir}`")
+        service = RunService(self.config)
         try:
-            orch: OrchestratorBase = build_orchestrator(self.config)
-            async for msg in orch.run(task):
-                artifacts.write_message(msg)
-                if msg.agent == "system":
-                    self._log_system(msg.content)
-                else:
-                    self._log_message(msg)
+            async for event in service.run(task):
+                self._consume_event(event)
                 await asyncio.sleep(0)
-            artifacts.finish("completed")
             self._refresh_tree()
             self.status_text = "✓ 完成"
         except Exception as e:
-            artifacts.finish("failed", error=str(e))
             self._log_system(f"❌ 运行出错: `{e}`")
             self.status_text = "运行出错"
         finally:
             self._running = False
+
+    def _consume_event(self, event: RunEvent) -> None:
+        if event.event_type == "run_started":
+            run_dir = event.metadata.get("run_dir")
+            if run_dir:
+                self._log_system(f"🗂 本次运行目录: `{run_dir}`")
+            return
+        if event.event_type == "run_completed":
+            return
+        if event.event_type == "run_failed":
+            self._log_system(f"❌ RunService 失败: `{event.content or ''}`")
+            return
+        if event.event_type != "agent_message":
+            return
+        msg = AgentMessage(
+            agent=event.agent or "system",
+            role=event.role or "system",
+            content=event.content or "",
+            final=bool(event.metadata.get("final")),
+        )
+        if msg.agent == "system":
+            self._log_system(msg.content)
+        else:
+            self._log_message(msg)
 
 
 def run_app(config: AppConfig, config_path: Optional[Path] = None) -> None:

@@ -45,7 +45,10 @@ class MockOrchestrator(OrchestratorBase):
             return
         if self.reason:
             yield AgentMessage("system", "system", f"⚠ 运行在演示模式：{self.reason}")
-        turns = min(self.config.workflow.max_turns, len(agents))
+        if self.config.workflow.mode == "pipeline":
+            turns = len(agents)
+        else:
+            turns = min(self.config.workflow.max_turns, len(agents))
         for i in range(turns):
             a = agents[i % len(agents)]
             toolset = WorkspaceToolset.for_agent(
@@ -82,6 +85,20 @@ def _build_model_client(model_cfg: ModelConfig):
     """根据 ModelConfig 构造 autogen model client。延迟导入。"""
     from autogen_ext.models.openai import OpenAIChatCompletionClient  # type: ignore
 
+    def _fallback_model_info(provider: str, model: str) -> dict:
+        base = {
+            "vision": False,
+            "function_calling": True,
+            "json_output": True,
+            "family": model,
+            "structured_output": True,
+            "multiple_system_messages": provider != "anthropic",
+        }
+        custom = model_cfg.extra.get("model_info")
+        if isinstance(custom, dict):
+            base.update(custom)
+        return base
+
     if model_cfg.provider == "anthropic":
         try:
             from autogen_ext.models.anthropic import AnthropicChatCompletionClient  # type: ignore
@@ -93,9 +110,12 @@ def _build_model_client(model_cfg: ModelConfig):
                 kwargs["base_url"] = model_cfg.base_url
             if model_cfg.temperature is not None:
                 kwargs["temperature"] = model_cfg.temperature
+            if model_cfg.max_tokens is not None:
+                kwargs["max_tokens"] = model_cfg.max_tokens
+            kwargs["model_info"] = _fallback_model_info("anthropic", model_cfg.model)
             return AnthropicChatCompletionClient(**kwargs)
-        except Exception:
-            pass
+        except Exception as exc:
+            raise RuntimeError(f"Anthropic client 初始化失败: {exc}") from exc
 
     kwargs: dict = dict(model=model_cfg.model)
     if model_cfg.api_key:
@@ -104,6 +124,9 @@ def _build_model_client(model_cfg: ModelConfig):
         kwargs["base_url"] = model_cfg.base_url
     if model_cfg.temperature is not None:
         kwargs["temperature"] = model_cfg.temperature
+    if model_cfg.max_tokens is not None:
+        kwargs["max_tokens"] = model_cfg.max_tokens
+    kwargs["model_info"] = _fallback_model_info(model_cfg.provider, model_cfg.model)
     return OpenAIChatCompletionClient(**kwargs)
 
 
@@ -188,6 +211,10 @@ class AutoGenOrchestrator(OrchestratorBase):
             async for m in self._run_single(agents[0], task):
                 yield m
             return
+        if self.config.workflow.mode == "pipeline":
+            async for m in self._run_pipeline(agents, task):
+                yield m
+            return
 
         team = self._build_team(agents)
         async for event in team.run_stream(task=task):
@@ -200,6 +227,27 @@ class AutoGenOrchestrator(OrchestratorBase):
             role = next((a.role for a in self.config.agents if a.name == name), "agent")
             yield AgentMessage(agent=name or "system", role=role, content=content)
         yield AgentMessage("system", "system", "协作结束。", final=True)
+
+    async def _run_pipeline(self, agents, task: str) -> AsyncIterator[AgentMessage]:
+        running_context = task
+        for agent in agents:
+            prompt = (
+                f"{running_context}\n\n"
+                "你处于 pipeline 协作模式，请只完成你当前阶段，并尽量写入工作目录。"
+            )
+            async for msg in self._run_single(agent, prompt):
+                yield msg
+                running_context = f"{running_context}\n\n[{agent.name} 输出]\n{msg.content}"
+            missing = self._missing_required_artifacts(agent.name)
+            if missing:
+                yield AgentMessage(
+                    "system",
+                    "system",
+                    f"❌ pipeline 门禁失败：`{agent.name}` 缺失产物 {', '.join(missing)}",
+                    final=True,
+                )
+                return
+        yield AgentMessage("system", "system", "协作结束（pipeline）。", final=True)
 
     async def _run_single(self, agent, task: str) -> AsyncIterator[AgentMessage]:
         from autogen_agentchat.messages import TextMessage  # type: ignore
@@ -217,6 +265,18 @@ class AutoGenOrchestrator(OrchestratorBase):
             final=True,
         )
 
+    def _missing_required_artifacts(self, agent_name: str) -> list[str]:
+        required = self.config.workflow.required_artifacts.get(agent_name, [])
+        if not required:
+            return []
+        workspace_name = next(
+            (a.resolved_workspace() for a in self.config.agents if a.name == agent_name),
+            agent_name,
+        )
+        workspace = self._workspace_root / workspace_name
+        missing = [name for name in required if not (workspace / name).exists()]
+        return missing
+
 
 # --------------------------- Factory ---------------------------
 
@@ -230,6 +290,14 @@ def build_orchestrator(config: AppConfig) -> OrchestratorBase:
 
     for a in config.agents:
         mc = config.get_model_for_agent(a)
+        if mc.provider == "anthropic":
+            try:
+                from autogen_ext.models.anthropic import AnthropicChatCompletionClient  # type: ignore # noqa: F401
+            except Exception as e:
+                return MockOrchestrator(
+                    config,
+                    reason=f"Agent `{a.name}` 使用 anthropic 但缺少依赖 ({e})",
+                )
         if not mc.resolved_api_key() and mc.provider != "openai_compatible":
             return MockOrchestrator(
                 config,

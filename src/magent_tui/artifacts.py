@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config_models import AppConfig
+from .run_events import RunEvent
 
 if TYPE_CHECKING:
     from .orchestrator import AgentMessage
@@ -30,7 +31,9 @@ class RunArtifacts:
         self.config = config
         self.task = task
         self.run_dir = run_dir
+        self.run_id = run_dir.name
         self.transcript_path = self.run_dir / "transcript.jsonl"
+        self.events_path = self.run_dir / "events.jsonl"
         self.summary_path = self.run_dir / "summary.md"
 
     @classmethod
@@ -39,6 +42,20 @@ class RunArtifacts:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         run_dir = root / "runs" / stamp
         run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "run.json").write_text(
+            json.dumps(
+                {
+                    "run_id": stamp,
+                    "project": config.project_name,
+                    "workflow": config.workflow.mode,
+                    "started_at": datetime.now().isoformat(timespec="seconds"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         (run_dir / "task.md").write_text(f"# Task\n\n{task}\n", encoding="utf-8")
         summary = [
             "# Run Summary",
@@ -84,6 +101,10 @@ class RunArtifacts:
                 f"\n## {record.timestamp} · {message.agent}"
                 f"{' (final)' if message.final else ''}\n\n{message.content}\n"
             )
+
+    def write_event(self, event: RunEvent) -> None:
+        with self.events_path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(event.to_dict(), ensure_ascii=False) + "\n")
 
     def finish(self, status: str, error: str | None = None) -> None:
         lines = [

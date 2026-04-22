@@ -1,7 +1,7 @@
 """从 Claude Code 的 `~/.claude/settings.json` 读取模型/Key 配置。
 
 Claude Code settings.json 常见字段（非公开契约，尽量宽松解析）：
-- `env.ANTHROPIC_API_KEY` / `env.ANTHROPIC_BASE_URL`
+- `env.ANTHROPIC_API_KEY` / `env.ANTHROPIC_AUTH_TOKEN` / `env.ANTHROPIC_BASE_URL`
 - `env.ANTHROPIC_MODEL` 或 `model`
 - 顶层可能的 `apiKeyHelper`（忽略）
 """
@@ -46,7 +46,12 @@ def model_from_claude_settings() -> Optional[ModelConfig]:
         return None
 
     env = data.get("env") or {}
-    api_key = env.get("ANTHROPIC_API_KEY") or data.get("api_key")
+    api_key = (
+        env.get("ANTHROPIC_API_KEY")
+        or env.get("ANTHROPIC_AUTH_TOKEN")
+        or data.get("api_key")
+        or data.get("auth_token")
+    )
     base_url = env.get("ANTHROPIC_BASE_URL") or data.get("base_url")
     model = env.get("ANTHROPIC_MODEL") or data.get("model") or "claude-sonnet-4-5"
 
@@ -72,6 +77,13 @@ def default_model_config() -> ModelConfig:
             provider="anthropic",
             model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
             api_key=os.getenv("ANTHROPIC_API_KEY"),
+            base_url=os.getenv("ANTHROPIC_BASE_URL"),
+        )
+    if os.getenv("ANTHROPIC_AUTH_TOKEN"):
+        return ModelConfig(
+            provider="anthropic",
+            model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+            api_key=os.getenv("ANTHROPIC_AUTH_TOKEN"),
             base_url=os.getenv("ANTHROPIC_BASE_URL"),
         )
     if os.getenv("OPENAI_API_KEY"):

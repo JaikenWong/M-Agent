@@ -25,7 +25,7 @@ class ModelConfig(BaseModel):
         if self.api_key:
             return self.api_key
         if self.provider == "anthropic":
-            return os.getenv("ANTHROPIC_API_KEY")
+            return os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")
         return os.getenv("OPENAI_API_KEY")
 
     def summary(self) -> str:
@@ -59,10 +59,11 @@ class AgentConfig(BaseModel):
 class WorkflowConfig(BaseModel):
     """协作编排配置。"""
 
-    mode: Literal["round_robin", "selector", "single"] = "round_robin"
+    mode: Literal["round_robin", "selector", "single", "pipeline"] = "round_robin"
     max_turns: int = 12
     termination_keywords: list[str] = Field(default_factory=lambda: ["TERMINATE", "任务完成"])
     selector_prompt: Optional[str] = None
+    required_artifacts: dict[str, list[str]] = Field(default_factory=dict)
 
 
 class AppConfig(BaseModel):

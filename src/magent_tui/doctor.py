@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config_models import AppConfig
-from .settings_loader import find_claude_settings, load_claude_settings
+from .settings_loader import default_model_config, find_claude_settings, load_claude_settings
 
 
 @dataclass
@@ -73,13 +73,18 @@ def _model_checks(cfg: AppConfig | None) -> list[DoctorCheck]:
     if cfg is None:
         return []
     checks: list[DoctorCheck] = []
+    fallback_model = default_model_config()
     for key, model in cfg.models.items():
         has_auth = bool(model.resolved_api_key() or model.base_url)
+        can_fallback = not has_auth and bool(fallback_model.resolved_api_key() or fallback_model.base_url)
+        detail = f"{model.provider}:{model.model} | api/base={'yes' if has_auth else 'no'}"
+        if can_fallback:
+            detail += f" | runtime_fallback={fallback_model.provider}:{fallback_model.model}"
         checks.append(
             DoctorCheck(
                 f"model:{key}",
-                has_auth or model.provider == "openai_compatible",
-                f"{model.provider}:{model.model} | api/base={'yes' if has_auth else 'no'}",
+                has_auth or model.provider == "openai_compatible" or can_fallback,
+                detail,
             )
         )
     if cfg.default_model not in cfg.models:
