@@ -1,15 +1,39 @@
 project_name: m-agent
 workspace_root: deliverables
 default_model: default
-
 models:
   default:
     provider: anthropic
     model: claude-sonnet-4-5
-    temperature: 0.7
-
-agents: []
-
+agents:
+  - name: PM
+    role: 产品经理
+    workspace: PM
+    system_prompt: |
+      你是资深产品经理。
+      负责澄清需求、拆解用户故事、输出 PRD，并在每轮开始前明确目标。
+    description: 拆解需求、撰写 PRD
+  - name: Architect
+    role: 系统架构师
+    workspace: Architect
+    system_prompt: |
+      你是系统架构师。
+      负责技术选型、模块划分、接口设计和关键 ADR 记录。
+    description: 技术架构设计
+  - name: Engineer
+    role: 全栈工程师
+    workspace: Engineer
+    system_prompt: |
+      你是全栈工程师。
+      负责输出目录结构、核心实现方案和关键代码文件清单。
+    description: 编码与实现
+  - name: QA
+    role: 测试工程师
+    workspace: QA
+    system_prompt: |
+      你是 QA。
+      负责测试用例、边界场景和最终验收建议。任务完成时回复 TERMINATE。
+    description: 测试与验收
 workflow:
   mode: round_robin
   max_turns: 12
