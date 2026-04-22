@@ -15,6 +15,7 @@ import asyncio
 from pathlib import Path
 from typing import Optional
 
+import yaml
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
@@ -40,6 +41,7 @@ from textual.widgets import (
 from .artifacts import RunArtifacts
 from .config_models import AgentConfig, AppConfig
 from .orchestrator import AgentMessage, OrchestratorBase, build_orchestrator
+from .settings_loader import default_model_config, model_from_claude_settings
 from .templates import describe_templates, instantiate_template
 
 
@@ -142,6 +144,137 @@ class TemplatePickerScreen(ModalScreen[Optional[str]]):
             self.dismiss(ev.item.id.removeprefix("tpl-"))
 
 
+class ProjectSettingsScreen(ModalScreen[Optional[AppConfig]]):
+    BINDINGS = [Binding("escape", "cancel", "取消")]
+
+    DEFAULT_CSS = """
+    ProjectSettingsScreen { align: center middle; }
+    #settings-box { width: 88%; height: 88%; border: round $accent; padding: 1 2; background: $panel; }
+    #settings-box Input, #settings-box TextArea { margin-bottom: 1; }
+    #model-helpers { height: auto; margin-bottom: 1; }
+    #model-helpers Button { width: 1fr; margin-right: 1; }
+    #settings-buttons { height: 3; align-horizontal: right; }
+    #settings-buttons Button { margin-left: 1; }
+    """
+
+    def __init__(self, config: AppConfig):
+        super().__init__()
+        self.config = config
+
+    def compose(self) -> ComposeResult:
+        cfg = self.config
+        models_yaml = yaml.safe_dump(
+            {k: v.model_dump(exclude_none=True) for k, v in cfg.models.items()},
+            allow_unicode=True,
+            sort_keys=False,
+            indent=2,
+        ).strip()
+        with Vertical(id="settings-box"):
+            yield Label("[b]项目设置[/b]")
+            yield Label("项目名")
+            yield Input(value=cfg.project_name, id="project-name")
+            yield Label("工作空间根目录")
+            yield Input(value=cfg.workspace_root, id="workspace-root")
+            yield Label("默认模型 key")
+            yield Input(value=cfg.default_model, id="default-model")
+            yield Label("编排模式 (round_robin / selector / single)")
+            yield Input(value=cfg.workflow.mode, id="workflow-mode")
+            yield Label("最大轮次")
+            yield Input(value=str(cfg.workflow.max_turns), id="workflow-turns")
+            yield Label("终止关键词（逗号分隔）")
+            yield Input(value=", ".join(cfg.workflow.termination_keywords), id="workflow-terms")
+            yield Label("Selector Prompt（selector 模式可选）")
+            yield TextArea(
+                text=cfg.workflow.selector_prompt or "",
+                id="selector-prompt",
+                show_line_numbers=False,
+            )
+            yield Label("模型配置 YAML（key -> ModelConfig）")
+            with Horizontal(id="model-helpers"):
+                yield Button("Claude 默认", id="btn-model-claude")
+                yield Button("OpenAI 默认", id="btn-model-openai")
+                yield Button("兼容端点模板", id="btn-model-compatible")
+            yield TextArea(text=models_yaml, id="models-yaml", show_line_numbers=True)
+            with Horizontal(id="settings-buttons"):
+                yield Button("取消", id="settings-cancel")
+                yield Button("保存", id="settings-save", variant="primary")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#settings-cancel")
+    def _cancel(self) -> None:
+        self.dismiss(None)
+
+    @on(Button.Pressed, "#btn-model-claude")
+    def _fill_claude_model(self) -> None:
+        model = model_from_claude_settings() or default_model_config()
+        self._replace_models_yaml({
+            "default": model.model_dump(exclude_none=True),
+        })
+        self.query_one("#default-model", Input).value = "default"
+
+    @on(Button.Pressed, "#btn-model-openai")
+    def _fill_openai_model(self) -> None:
+        self._replace_models_yaml({
+            "default": {
+                "provider": "openai",
+                "model": "gpt-4o-mini",
+                "base_url": None,
+            }
+        })
+        self.query_one("#default-model", Input).value = "default"
+
+    @on(Button.Pressed, "#btn-model-compatible")
+    def _fill_compatible_model(self) -> None:
+        self._replace_models_yaml({
+            "default": {
+                "provider": "openai_compatible",
+                "model": "your-model-name",
+                "base_url": "https://api.example.com/v1",
+                "api_key": "YOUR_API_KEY",
+            }
+        })
+        self.query_one("#default-model", Input).value = "default"
+
+    def _replace_models_yaml(self, data: dict) -> None:
+        text = yaml.safe_dump(data, allow_unicode=True, sort_keys=False, indent=2).strip()
+        self.query_one("#models-yaml", TextArea).text = text
+
+    @on(Button.Pressed, "#settings-save")
+    def _save(self) -> None:
+        try:
+            project_name = self.query_one("#project-name", Input).value.strip() or "m-agent"
+            workspace_root = self.query_one("#workspace-root", Input).value.strip() or "deliverables"
+            default_model = self.query_one("#default-model", Input).value.strip() or "default"
+            mode = self.query_one("#workflow-mode", Input).value.strip() or "round_robin"
+            max_turns = int(self.query_one("#workflow-turns", Input).value.strip() or "12")
+            termination_keywords = [
+                item.strip()
+                for item in self.query_one("#workflow-terms", Input).value.split(",")
+                if item.strip()
+            ] or ["TERMINATE"]
+            selector_prompt = self.query_one("#selector-prompt", TextArea).text.strip() or None
+            models_text = self.query_one("#models-yaml", TextArea).text.strip()
+            models_data = yaml.safe_load(models_text) if models_text else {}
+            updated = self.config.model_copy(deep=True)
+            updated.project_name = project_name
+            updated.workspace_root = workspace_root
+            updated.default_model = default_model
+            updated.workflow.mode = mode  # type: ignore[assignment]
+            updated.workflow.max_turns = max_turns
+            updated.workflow.termination_keywords = termination_keywords
+            updated.workflow.selector_prompt = selector_prompt
+            updated.models = models_data or {}
+            updated = AppConfig.model_validate(updated.model_dump())
+        except Exception as exc:
+            if hasattr(self.app, "notify"):
+                self.app.notify(f"保存失败: {exc}", severity="error")
+            self.app.bell()
+            return
+        self.dismiss(updated)
+
+
 class AgentPanel(VerticalScroll):
     """左侧 Agent 列表 + 操作按钮。"""
 
@@ -176,6 +309,7 @@ class MAgentApp(App):
         Binding("ctrl+q", "quit", "退出"),
         Binding("ctrl+n", "new_session", "新会话"),
         Binding("ctrl+s", "save_config", "保存"),
+        Binding("ctrl+p", "edit_project", "项目设置"),
         Binding("ctrl+t", "pick_template", "模板"),
         Binding("ctrl+a", "add_agent", "+Agent"),
         Binding("ctrl+e", "open_workspace", "交付件"),
@@ -199,7 +333,7 @@ class MAgentApp(App):
                 yield ChatLog(id="chat-log")
                 with Vertical(id="input-row"):
                     yield Input(
-                        placeholder="输入任务描述，回车发送  (Ctrl+T 模板 / Ctrl+A 加 Agent / Ctrl+E 查看交付件)",
+                        placeholder="输入任务描述，回车发送  (Ctrl+P 项目 / Ctrl+T 模板 / Ctrl+A Agent / Ctrl+E 交付件)",
                         id="task-input",
                     )
             with Vertical(id="workspace"):
@@ -232,7 +366,7 @@ class MAgentApp(App):
                     ListItem(
                         Label(
                             f"[{color}]●[/{color}] [b]{a.name}[/b] [dim]{a.role or '未命名角色'}[/dim]\n"
-                            f"[dim]model: {a.model or self.config.default_model} | ws: {a.resolved_workspace()}[/dim]"
+                            f"[dim]model: {self.config.model_name_for_agent(a)} | ws: {a.resolved_workspace()}[/dim]"
                         ),
                         id=f"agent-{idx}",
                         classes="agent-item",
@@ -246,6 +380,7 @@ class MAgentApp(App):
             Vertical(
                 Button("+模板", id="btn-tpl", variant="primary"),
                 Button("+Agent", id="btn-add"),
+                Button("项目", id="btn-project"),
                 Button("编辑", id="btn-edit"),
                 Button("删除", id="btn-del"),
                 Button("清空", id="btn-clear"),
@@ -292,6 +427,10 @@ class MAgentApp(App):
         self._selected_agent_index = 0
         self._render_agents()
         self.status_text = "已清空 Agent"
+
+    @on(Button.Pressed, "#btn-project")
+    def _btn_project(self) -> None:
+        self.action_edit_project()
 
     @on(Button.Pressed, "#btn-edit")
     def _btn_edit(self) -> None:
@@ -370,6 +509,23 @@ class MAgentApp(App):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.config.to_yaml(path)
         self.status_text = f"已保存到 {path}"
+
+    def action_edit_project(self) -> None:
+        def _cb(updated: Optional[AppConfig]) -> None:
+            if not updated:
+                return
+            self.config = updated
+            self.title = f"magent-tui · {self.config.project_name}"
+            self.config.ensure_workspace()
+            self._render_agents()
+            self._refresh_tree()
+            self.status_text = "已更新项目设置"
+            self._log_system(
+                f"已更新项目设置：项目 [b]{self.config.project_name}[/b]，"
+                f"编排 [b]{self.config.workflow.mode}[/b]，默认模型 [b]{self.config.default_model}[/b]。"
+            )
+
+        self.push_screen(ProjectSettingsScreen(self.config), _cb)
 
     def action_new_session(self) -> None:
         self.query_one(ChatLog).remove_children()

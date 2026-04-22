@@ -16,3 +16,11 @@ venv/
 *.sw[po]
 *~
 deliverables/
+
+# IDE / AI tool artifacts
+.agents/
+.kiro/
+.qoder/
+.trae/
+skills/
+skills-lock.json

@@ -28,6 +28,11 @@ class ModelConfig(BaseModel):
             return os.getenv("ANTHROPIC_API_KEY")
         return os.getenv("OPENAI_API_KEY")
 
+    def summary(self) -> str:
+        provider = self.provider
+        model = self.model
+        return f"{provider}:{model}"
+
 
 class AgentConfig(BaseModel):
     """单个 Agent 的配置。"""
@@ -77,6 +82,10 @@ class AppConfig(BaseModel):
                 return next(iter(self.models.values()))
             return ModelConfig()
         return self.models[key]
+
+    def model_name_for_agent(self, agent: AgentConfig) -> str:
+        key = agent.model or self.default_model
+        return key if key in self.models else self.default_model
 
     def ensure_workspace(self) -> Path:
         """创建 workspace_root 及每个 Agent 的子目录。"""

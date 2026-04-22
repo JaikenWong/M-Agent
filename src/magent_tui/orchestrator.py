@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import AsyncIterator, Optional
 
 from .config_models import AgentConfig, AppConfig, ModelConfig
+from .workspace_tools import WorkspaceToolset
 
 
 @dataclass
@@ -47,6 +48,21 @@ class MockOrchestrator(OrchestratorBase):
         turns = min(self.config.workflow.max_turns, len(agents))
         for i in range(turns):
             a = agents[i % len(agents)]
+            toolset = WorkspaceToolset.for_agent(
+                self.config.ensure_workspace(),
+                a.resolved_workspace(),
+                a.name,
+            )
+            output_path = f"mock_round_{i + 1}.md"
+            toolset.write_text_file(
+                output_path,
+                (
+                    f"# {a.name}\n\n"
+                    f"- role: {a.role}\n"
+                    f"- task: {task}\n"
+                    f"- mode: mock\n"
+                ),
+            )
             await asyncio.sleep(0.3)
             yield AgentMessage(
                 agent=a.name,
@@ -54,7 +70,7 @@ class MockOrchestrator(OrchestratorBase):
                 content=(
                     f"【{a.role}·{a.name}】\n"
                     f"收到任务：{task}\n"
-                    f"(演示模式输出) 我会把产出写入工作目录 `{a.resolved_workspace()}/`。"
+                    f"(演示模式输出) 已写入 `{a.resolved_workspace()}/{output_path}`。"
                 ),
             )
         yield AgentMessage("system", "system", "协作结束（演示模式）。", final=True)
@@ -91,6 +107,23 @@ def _build_model_client(model_cfg: ModelConfig):
     return OpenAIChatCompletionClient(**kwargs)
 
 
+def _build_tools_for_agent(workspace_root: Path, agent: AgentConfig):
+    toolset = WorkspaceToolset.for_agent(workspace_root, agent.resolved_workspace(), agent.name)
+    try:
+        from autogen_core.tools import FunctionTool  # type: ignore
+
+        return [
+            FunctionTool(
+                spec["callable"],
+                name=spec["name"],
+                description=spec["description"],
+            )
+            for spec in toolset.tool_specs()
+        ]
+    except Exception:
+        return []
+
+
 class AutoGenOrchestrator(OrchestratorBase):
     def __init__(self, config: AppConfig):
         self.config = config
@@ -108,14 +141,21 @@ class AutoGenOrchestrator(OrchestratorBase):
                 f"{a.system_prompt}\n\n"
                 f"[你的工作目录]: {workspace_path}\n"
                 f"[角色]: {a.role}\n"
+                "[可用工具]: write_text_file / append_text_file / read_text_file / list_workspace_files\n"
+                "所有过程稿、分析稿、代码片段、交付件优先写入你的工作目录。\n"
                 "请用中文回复。不需要继续时回复 `TERMINATE`。"
             )
+            kwargs = {}
+            tools = _build_tools_for_agent(self._workspace_root, a)
+            if tools:
+                kwargs["tools"] = tools
             agents.append(
                 AssistantAgent(
                     name=a.name,
                     model_client=client,
                     system_message=system,
                     description=a.description or a.role,
+                    **kwargs,
                 )
             )
         return agents
