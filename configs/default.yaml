@@ -1,0 +1,18 @@
+project_name: m-agent
+workspace_root: deliverables
+default_model: default
+
+models:
+  default:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    temperature: 0.7
+
+agents: []
+
+workflow:
+  mode: round_robin
+  max_turns: 12
+  termination_keywords:
+    - TERMINATE
+    - 任务完成
