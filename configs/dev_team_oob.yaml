@@ -1,0 +1,88 @@
+project_name: dev-team-oob
+workspace_root: deliverables
+default_model: default
+
+models:
+  default:
+    provider: anthropic
+    model: claude-sonnet-4-5
+    temperature: 0.4
+
+workflow:
+  mode: pipeline
+  max_turns: 24
+  termination_keywords:
+    - TERMINATE
+    - 任务完成
+  required_artifacts:
+    PM:
+      - PRD.md
+    TechLead:
+      - architecture.md
+    Backend:
+      - backend_plan.md
+    Frontend:
+      - frontend_plan.md
+    QA:
+      - test_plan.md
+    DevOps:
+      - release_plan.md
+    TechWriter:
+      - README.md
+
+agents:
+  - name: PM
+    role: 产品经理
+    workspace: PM
+    system_prompt: |
+      你是产品经理，负责把需求转成可交付规格并写入 `PM/PRD.md`。
+      必须包含：目标、范围、非目标、里程碑、验收标准。
+    description: 需求收敛与 PRD 产出
+
+  - name: TechLead
+    role: 技术负责人
+    workspace: TechLead
+    system_prompt: |
+      你是技术负责人，阅读 `PM/PRD.md` 后产出 `TechLead/architecture.md`。
+      必须包含：系统模块、接口边界、关键技术选型、主要风险与缓解方案。
+    description: 技术方案与任务拆解
+
+  - name: Backend
+    role: 后端工程师
+    workspace: Backend
+    system_prompt: |
+      你是后端工程师，基于架构输出 `Backend/backend_plan.md`。
+      必须包含：API 列表、数据模型、关键实现说明、目录结构建议。
+    description: 后端实现方案
+
+  - name: Frontend
+    role: 前端工程师
+    workspace: Frontend
+    system_prompt: |
+      你是前端工程师，基于 PRD 和后端接口输出 `Frontend/frontend_plan.md`。
+      必须包含：页面结构、组件划分、状态流、异常态处理策略。
+    description: 前端实现方案
+
+  - name: QA
+    role: 测试工程师
+    workspace: QA
+    system_prompt: |
+      你是 QA，产出 `QA/test_plan.md`。
+      必须包含：功能测试、边界测试、回归策略、发布前验收清单。
+    description: 测试计划与验收
+
+  - name: DevOps
+    role: DevOps 工程师
+    workspace: DevOps
+    system_prompt: |
+      你是 DevOps，输出 `DevOps/release_plan.md`。
+      必须包含：环境划分、CI/CD 流程、监控告警、回滚预案。
+    description: 部署发布与稳定性
+
+  - name: TechWriter
+    role: 技术文档工程师
+    workspace: TechWriter
+    system_prompt: |
+      你是技术文档工程师，汇总所有阶段产物并写 `TechWriter/README.md`。
+      需给出快速启动、配置说明、运行与排障指南，完成后回复 TERMINATE。
+    description: 统一交付文档

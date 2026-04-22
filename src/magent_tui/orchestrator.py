@@ -29,6 +29,15 @@ class OrchestratorBase:
         yield  # type: ignore[unreachable]
 
 
+def _missing_required_artifacts(config: AppConfig, workspace_root: Path, agent_name: str) -> list[str]:
+    required = config.workflow.required_artifacts.get(agent_name, [])
+    if not required:
+        return []
+    workspace_name = next((a.resolved_workspace() for a in config.agents if a.name == agent_name), agent_name)
+    workspace = workspace_root / workspace_name
+    return [name for name in required if not (workspace / name).exists()]
+
+
 # --------------------------- Mock ---------------------------
 
 class MockOrchestrator(OrchestratorBase):
@@ -37,6 +46,7 @@ class MockOrchestrator(OrchestratorBase):
     def __init__(self, config: AppConfig, reason: str = ""):
         self.config = config
         self.reason = reason
+        self._workspace_root = self.config.ensure_workspace()
 
     async def run(self, task: str) -> AsyncIterator[AgentMessage]:
         agents = self.config.agents
@@ -76,6 +86,15 @@ class MockOrchestrator(OrchestratorBase):
                     f"(演示模式输出) 已写入 `{a.resolved_workspace()}/{output_path}`。"
                 ),
             )
+            missing = _missing_required_artifacts(self.config, self._workspace_root, a.name)
+            if missing:
+                yield AgentMessage(
+                    "system",
+                    "system",
+                    f"❌ pipeline 门禁失败：`{a.name}` 缺失产物 {', '.join(missing)}",
+                    final=True,
+                )
+                return
         yield AgentMessage("system", "system", "协作结束（演示模式）。", final=True)
 
 
@@ -238,7 +257,7 @@ class AutoGenOrchestrator(OrchestratorBase):
             async for msg in self._run_single(agent, prompt):
                 yield msg
                 running_context = f"{running_context}\n\n[{agent.name} 输出]\n{msg.content}"
-            missing = self._missing_required_artifacts(agent.name)
+            missing = _missing_required_artifacts(self.config, self._workspace_root, agent.name)
             if missing:
                 yield AgentMessage(
                     "system",
@@ -264,19 +283,6 @@ class AutoGenOrchestrator(OrchestratorBase):
             content=getattr(msg, "content", str(msg)),
             final=True,
         )
-
-    def _missing_required_artifacts(self, agent_name: str) -> list[str]:
-        required = self.config.workflow.required_artifacts.get(agent_name, [])
-        if not required:
-            return []
-        workspace_name = next(
-            (a.resolved_workspace() for a in self.config.agents if a.name == agent_name),
-            agent_name,
-        )
-        workspace = self._workspace_root / workspace_name
-        missing = [name for name in required if not (workspace / name).exists()]
-        return missing
-
 
 # --------------------------- Factory ---------------------------
 

@@ -16,6 +16,9 @@ venv/
 *.sw[po]
 *~
 deliverables/
+deliverables-smoke*/
+.archive/
+configs/*.generated.yaml
 
 # IDE / AI tool artifacts
 .agents/

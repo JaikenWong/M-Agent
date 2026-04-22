@@ -19,7 +19,9 @@
 ## 目录
 
 - [安装](#安装)
+- [界面预览](#界面预览)
 - [5 分钟启动](#5-分钟启动)
+- [完整演示](#完整演示)
 - [CLI 命令](#cli-命令)
 - [TUI 怎么用](#tui-怎么用)
 - [模型配置](#模型配置)
@@ -51,6 +53,36 @@ python3 -m pip install -e ".[litellm,anthropic]"
 magent-tui --help
 ```
 
+## 界面预览
+
+下面这张图是当前 TUI 的示意截图，方便你先建立直觉：
+
+![magent-tui overview](docs/assets/tui-overview.svg)
+
+界面采用 Tab 布局（`Chat` / `Agents` / `Deliverables` / `Config`）：
+
+- `Chat`：系统消息、Agent 回复、任务输入
+- `Agents`：模板导入、Agent 新建/编辑/删除
+- `Deliverables`：工作目录树 + 文件预览
+- `Config`：当前项目配置概览 + 编辑入口
+
+任务发送键位速查：
+
+![send keys](docs/assets/send-keys.svg)
+
+如果你更关心结构，可以把它理解成下面这个布局：
+
+```text
+┌────────────────────────────────────────────────────────────────────────────┐
+│ Tabs: [Chat] [Agents] [Deliverables] [Config]                             │
+├────────────────────────────────────────────────────────────────────────────┤
+│ Chat: 状态条 + 消息流 + 任务输入                                            │
+│ Agents: 模板导入 + Agent 管理                                               │
+│ Deliverables: workspace_root + runs/<timestamp> + 文件预览                 │
+│ Config: 模型、工作流、配置来源状态                                          │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
 ## 5 分钟启动
 
 ### 方式 1：最快启动
@@ -61,7 +93,7 @@ magent-tui --help
 magent-tui run
 ```
 
-不传 `--config` 时，会自动使用内置 `product_sprint` 模板启动。
+不传 `--config` 时，会自动使用内置 `dev_team_oob` 模板启动。
 
 ### 方式 2：先生成配置，再启动
 
@@ -74,7 +106,7 @@ magent-tui templates
 2. 生成一份配置文件
 
 ```bash
-magent-tui init --template product_sprint -o configs/my.yaml
+magent-tui init --template dev_team_oob -o configs/my.yaml
 ```
 
 3. 检查环境是否就绪
@@ -98,6 +130,120 @@ magent-tui doctor --config configs/default.yaml
 magent-tui run --config configs/default.yaml
 ```
 
+如果你想直接体验“研发团队协作”场景，建议优先使用开箱即用模板配置：
+
+```bash
+magent-tui doctor --config configs/dev_team_oob.yaml
+magent-tui run --config configs/dev_team_oob.yaml
+```
+
+## 完整演示
+
+如果你想从 0 到 1 跑通一次，直接照下面做就行。
+
+### 第 1 步：创建虚拟环境并安装
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -e .
+```
+
+### 第 2 步：检查环境
+
+```bash
+magent-tui doctor --config configs/default.yaml
+```
+
+如果输出里这些项是 `OK`，就说明基础条件已经齐了：
+
+- `textual`
+- `autogen_agentchat`
+- `autogen_core`
+- `autogen_ext`
+- `config`
+- `claude_settings` 或至少某个 `model:*`
+
+### 第 3 步：启动 TUI
+
+```bash
+magent-tui run --config configs/default.yaml
+```
+
+启动后建议这样操作：
+
+1. 看左侧 Agent 列表是否已经有 `PM / Architect / Engineer / QA`
+2. 按 `Ctrl+P` 检查默认模型和工作目录
+3. 如果要换模板，按 `Ctrl+T`
+4. 在底部输入框粘贴一条任务并回车
+
+### 第 4 步：运行一条真实任务
+
+可以先用这条：
+
+```text
+请围绕“一个带 TUI 的多智能体协作软件”做一次最小产品与实现拆解。
+
+要求：
+1. PM 输出目标用户、核心问题、MVP 范围和成功指标。
+2. Architect 输出系统模块划分和关键技术决策。
+3. Engineer 输出目录结构和最小实现方案。
+4. QA 输出测试计划和验收标准。
+5. 所有角色把内容写入自己的工作目录。
+```
+
+### 第 5 步：检查产物
+
+跑完以后，去右侧文件树或命令行里看这些目录：
+
+```bash
+ls -la deliverables
+find deliverables -maxdepth 2 -type f | sort
+```
+
+通常你会看到：
+
+```text
+deliverables/
+  PM/
+    activity.md
+  Architect/
+    activity.md
+  Engineer/
+    activity.md
+  QA/
+    activity.md
+  runs/
+    <timestamp>/
+      task.md
+      summary.md
+      transcript.jsonl
+      system.md
+```
+
+### 第 6 步：验证 Agent 真实写文件能力
+
+如果你想专门确认 tool calling 是通的，可以再发一条很短的任务：
+
+```text
+请调用 write_text_file，把文本“hello from agent”写入 smoke.md，然后回复 done。
+```
+
+跑完后检查当前 Agent 的工作目录里是否出现 `smoke.md`。
+
+### 第 7 步：保存你的配置
+
+如果你在 TUI 里改过 Agent、模型或 workflow，按：
+
+```text
+Ctrl+S
+```
+
+当前配置会保存到：
+
+- 你启动时传入的 YAML
+- 如果没有传 `--config`，则默认保存到 `configs/current.yaml`
+
 ## CLI 命令
 
 ### `magent-tui run`
@@ -111,7 +257,7 @@ magent-tui run --config configs/default.yaml
 
 行为说明：
 
-- 不传 `--config` 时，自动用内置 `product_sprint` 模板启动
+- 不传 `--config` 时，自动用内置 `dev_team_oob` 模板启动
 - 传了 `--config` 时，优先读取 YAML
 - 如果配置中的模型没有显式 API 信息，运行时会尝试回退到 Claude settings 或环境变量
 
@@ -164,7 +310,9 @@ TUI 布局大致是三栏：
 
 | 键 | 作用 |
 |---|---|
-| `Enter` | 发送当前任务 |
+| `Enter` | 发送当前任务（推荐） |
+| `Ctrl+Enter` | 发送当前任务（终端支持时） |
+| `F5` | 发送当前任务（终端兼容兜底） |
 | `Ctrl+N` | 新建会话 |
 | `Ctrl+S` | 保存当前配置 |
 | `Ctrl+P` | 编辑项目设置 / 模型 / 编排 |
@@ -210,6 +358,22 @@ TUI 布局大致是三栏：
 - `兼容端点模板`
 
 适合先快速生成一份模型配置，再细改。
+
+### 一次任务从输入到落盘的流程
+
+```mermaid
+flowchart LR
+    A[在 TUI 输入任务] --> B[build_orchestrator]
+    B --> C{AutoGen 依赖和模型可用?}
+    C -- 否 --> D[MockOrchestrator]
+    C -- 是 --> E[AutoGenOrchestrator]
+    E --> F[Agent 协作]
+    F --> G[工作目录工具 write/read/list]
+    D --> H[模拟回复]
+    G --> I[workspace_root/<agent>/]
+    H --> I
+    F --> J[workspace_root/runs/<timestamp>/]
+```
 
 ## 模型配置
 
@@ -353,28 +517,16 @@ workflow:
 - `round_robin`：按顺序轮流发言
 - `selector`：让模型决定下一位发言者
 - `single`：只运行第一个 Agent
-- `pipeline`：按 Agent 列表顺序阶段化执行
+- `pipeline`：按 Agent 顺序分阶段执行，可配 `required_artifacts` 做门禁
 
 `selector` 模式下，可额外配置 `selector_prompt`。
-`pipeline` 模式下，可通过 `required_artifacts` 配置阶段门禁。
-
-示例：
-
-```yaml
-workflow:
-  mode: pipeline
-  required_artifacts:
-    PM:
-      - PRD.md
-    Architect:
-      - architecture.md
-```
 
 ## 内置模板
 
 当前内置这些模板：
 
 - `product_sprint`：产品冲刺 5 人小队
+- `dev_team_oob`：开箱即用研发团队（PM → TechLead → Backend → Frontend → QA → DevOps → TechWriter）
 - `content_factory`：内容生产流水线
 - `dev_delivery`：需求 -> 实现 -> 测试 -> 文档
 - `research_squad`：研究主管 + 搜集 + 分析 + 批判
@@ -392,6 +544,94 @@ magent-tui templates
 ```bash
 magent-tui init --template dev_delivery -o configs/dev.yaml
 ```
+
+## 使用示例
+
+下面这些任务都可以直接复制到 TUI 输入框里运行。
+
+### 示例 1：产品需求拆解
+
+适合模板：`product_sprint`
+
+```text
+请围绕“面向独立开发者的 AI Agent 控制台”做一次产品冲刺协作。
+
+要求：
+1. PM 输出产品目标、用户画像、核心功能、MVP 边界和成功指标。
+2. Research 给出 3 个竞品的对比分析。
+3. Architect 输出系统模块划分、核心数据流和技术建议。
+4. Engineer 给出目录结构、关键接口和最小实现方案。
+5. QA 输出测试计划和验收标准。
+
+所有角色都把自己的产物写入各自工作目录。
+```
+
+预期你会在这些目录下看到内容：
+
+- `deliverables/PM/`
+- `deliverables/Research/`
+- `deliverables/Architect/`
+- `deliverables/Engineer/`
+- `deliverables/QA/`
+
+### 示例 2：代码交付方案
+
+适合模板：`dev_delivery`
+
+```text
+请为一个“支持多角色、多模型、多工作空间配置的 TUI 多智能体系统”生成一版最小可交付方案。
+
+要求：
+1. Requirements 先输出功能列表和验收标准。
+2. Implementation 给出目录结构、关键类、配置文件结构和最小代码框架。
+3. Testing 写出测试用例和验证步骤。
+4. Docs 给出 README 大纲和启动说明。
+
+如果需要写文件，请直接写入各自工作目录。
+```
+
+这个模板适合把一个模糊需求先收敛成“可开发、可验证、可交付”的第一版。
+
+### 示例 3：深度研究任务
+
+适合模板：`research_squad`
+
+```text
+请研究“2026 年面向开发者的多 Agent 产品形态”。
+
+要求：
+1. Director 先拆成 4 个子问题。
+2. Searcher 为每个子问题收集信息点和来源。
+3. Analyst 汇总共同趋势、差异点和关键判断。
+4. Critic 专门找可能的反例、风险和不确定性。
+5. 最终输出一份结构化研究结论。
+```
+
+### 示例 4：代码评审
+
+适合模板：`code_review`
+
+```text
+请对当前项目做一次多角色代码评审。
+
+要求：
+1. Reader 总结模块结构和关键调用链。
+2. Security 检查密钥、权限、路径、输入处理和外部调用风险。
+3. Performance 检查无效 IO、重复初始化、阻塞点和潜在瓶颈。
+4. Reviewer 汇总 Must / Should / Nice 三档问题清单。
+
+输出写入各自工作目录。
+```
+
+### 示例 5：先验证工具调用
+
+如果你只是想确认真实 Agent 能往工作目录写文件，可以在单 Agent 或 `dev_delivery` 模板下先试一条非常短的任务：
+
+```text
+请调用 write_text_file，把文本“hello from agent”写入 smoke.md，然后回复 done。
+```
+
+跑完后去对应 Agent 的工作目录查看 `smoke.md` 是否生成。
 
 ## 运行产物
 
@@ -496,9 +736,19 @@ source .venv/bin/activate
 python3 -m pip install -e .
 ```
 
-### 4. 发送任务是 `Enter` 还是 `Ctrl+Enter`
+### 4. 发送任务没反应怎么办
 
-当前实际行为是：输入框里直接按 `Enter` 提交任务。
+先确认你在 `Chat` 页（`Ctrl+1`），然后按下面顺序排查：
+
+1. 直接按 `Enter` 发送（最稳定）
+2. 如果 `Enter` 也不触发，按 `F5`
+3. 仍失败就点击“发送”按钮
+4. 最后运行 `magent-tui doctor --config configs/dev_team_oob.yaml` 检查环境
+
+补充说明：
+
+- 少数终端会吞掉 `Ctrl+Enter`，优先使用 `Enter` 或 `F5`
+- 如果当前任务正在运行，输入框不会再次提交（状态栏会提示“运行中...”）
 
 ### 5. 这项目更适合拿来做什么
 

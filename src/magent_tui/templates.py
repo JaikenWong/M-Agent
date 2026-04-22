@@ -133,11 +133,79 @@ _debate: list[AgentConfig] = [
 得出结论后回复 `TERMINATE`。"""),
 ]
 
+# ---------- dev_team_oob: 开箱即用研发团队 ----------
+_dev_team_oob: list[AgentConfig] = [
+    _a(
+        "PM",
+        "产品经理",
+        """你是产品经理，负责把用户输入转成可交付规格：
+- 输出目标、范围、非目标、里程碑、验收标准
+- 必须写出 `PM/PRD.md`
+- 若需求不清晰，先列出待确认问题，再给可执行假设版本""",
+        desc="需求收敛与 PRD 产出",
+    ),
+    _a(
+        "TechLead",
+        "技术负责人",
+        """你是技术负责人，负责总体设计和拆解：
+- 阅读 `PM/PRD.md`
+- 输出技术方案、模块划分、接口草案、风险清单
+- 必须写出 `TechLead/architecture.md`""",
+        desc="技术方案与任务拆解",
+    ),
+    _a(
+        "Backend",
+        "后端工程师",
+        """你是后端工程师，负责服务端实现方案：
+- 基于架构产出 API 设计、数据模型、关键实现说明
+- 必须写出 `Backend/backend_plan.md`
+- 尽量给出可落地的目录结构和示例代码片段""",
+        desc="后端实现方案",
+    ),
+    _a(
+        "Frontend",
+        "前端工程师",
+        """你是前端工程师，负责界面与交互实现方案：
+- 基于 PRD 和后端接口输出页面结构、状态流、组件拆分
+- 必须写出 `Frontend/frontend_plan.md`
+- 说明关键交互和错误态处理""",
+        desc="前端实现方案",
+    ),
+    _a(
+        "QA",
+        "测试工程师",
+        """你是 QA，负责测试设计与验收判断：
+- 基于前后端方案编写测试矩阵、测试用例、回归策略
+- 必须写出 `QA/test_plan.md`
+- 若交付完整可测，最后回复 TERMINATE""",
+        desc="测试计划与验收",
+    ),
+    _a(
+        "DevOps",
+        "DevOps 工程师",
+        """你是 DevOps，负责部署与发布流程：
+- 给出环境划分、CI/CD、监控告警、回滚策略
+- 必须写出 `DevOps/release_plan.md`
+- 给出上线检查清单""",
+        desc="部署发布与稳定性",
+    ),
+    _a(
+        "TechWriter",
+        "技术文档工程师",
+        """你是技术文档工程师，负责最终交付文档编排：
+- 汇总前面产物，形成开发者快速上手文档
+- 必须写出 `TechWriter/README.md`
+- 结束时回复 TERMINATE""",
+        desc="统一交付文档",
+    ),
+]
+
 
 TEMPLATE_LIBRARY: dict[str, list[AgentConfig]] = {
     "product_sprint": _product_sprint,
     "content_factory": _content_factory,
     "dev_delivery": _dev_delivery,
+    "dev_team_oob": _dev_team_oob,
     "research_squad": _research_squad,
     "code_review": _code_review,
     "debate": _debate,
@@ -147,6 +215,7 @@ TEMPLATE_DESCRIPTIONS: dict[str, str] = {
     "product_sprint": "产品冲刺 5 人小队：PM → 研究 → 架构 → 工程 → QA",
     "content_factory": "内容生产流水线：策划 → 调研 → 撰写 → 编辑 → 分发",
     "dev_delivery": "精简开发交付：需求 → 实现 → 测试 → 文档",
+    "dev_team_oob": "开箱即用研发团队：PM → TechLead → Backend → Frontend → QA → DevOps → TechWriter",
     "research_squad": "深度研究小队：主管 → 搜集 → 分析 → 批判",
     "code_review": "代码评审小组：通读 → 安全 → 性能 → 综合",
     "debate": "双人辩论+裁判：正方 ↔ 反方 → 裁判",

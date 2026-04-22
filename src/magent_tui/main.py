@@ -16,13 +16,30 @@ from .templates import describe_templates, instantiate_template, template_names
 def _build_default_config(template: Optional[str] = None) -> AppConfig:
     model = default_model_config()
     agents: list[AgentConfig] = instantiate_template(template) if template else []
+    workflow = WorkflowConfig(mode="round_robin", max_turns=12)
+    project_name = "m-agent"
+    if template == "dev_team_oob":
+        project_name = "dev-team-oob"
+        workflow = WorkflowConfig(
+            mode="pipeline",
+            max_turns=24,
+            required_artifacts={
+                "PM": ["PRD.md"],
+                "TechLead": ["architecture.md"],
+                "Backend": ["backend_plan.md"],
+                "Frontend": ["frontend_plan.md"],
+                "QA": ["test_plan.md"],
+                "DevOps": ["release_plan.md"],
+                "TechWriter": ["README.md"],
+            },
+        )
     return AppConfig(
-        project_name="m-agent",
+        project_name=project_name,
         workspace_root="deliverables",
         default_model="default",
         models={"default": model},
         agents=agents,
-        workflow=WorkflowConfig(mode="round_robin", max_turns=12),
+        workflow=workflow,
     )
 
 
@@ -58,16 +75,16 @@ def cmd_run(args: argparse.Namespace) -> int:
             return 2
         cfg = AppConfig.from_yaml(path)
     else:
-        cfg = _build_default_config("product_sprint")
+        cfg = _build_default_config("dev_team_oob")
         path = None
-        print("ℹ 未指定 --config，使用内置 product_sprint 模板启动。")
+        print("ℹ 未指定 --config，使用内置 dev_team_oob 模板启动。")
 
     for key, m in list(cfg.models.items()):
         if not m.resolved_api_key() and not m.base_url:
             fallback = default_model_config()
             cfg.models[key] = fallback
 
-    from .app import run_app
+    from .tab_app import run_app
 
     run_app(cfg, path)
     return 0
