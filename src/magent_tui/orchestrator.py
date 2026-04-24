@@ -150,20 +150,62 @@ def _build_model_client(model_cfg: ModelConfig):
 
 
 def _build_tools_for_agent(workspace_root: Path, agent: AgentConfig):
-    toolset = WorkspaceToolset.for_agent(workspace_root, agent.resolved_workspace(), agent.name)
-    try:
-        from autogen_core.tools import FunctionTool  # type: ignore
+    from autogen_core.tools import FunctionTool  # type: ignore
 
-        return [
-            FunctionTool(
-                spec["callable"],
-                name=spec["name"],
-                description=spec["description"],
-            )
-            for spec in toolset.tool_specs()
-        ]
-    except Exception:
-        return []
+    toolset = WorkspaceToolset.for_agent(workspace_root, agent.resolved_workspace(), agent.name)
+    ws = toolset.agent_workspace
+
+    def _write_text_file(path: str, content: str) -> str:
+        target = (ws / Path(path.strip() or ".")).resolve()
+        try:
+            target.relative_to(ws)
+        except ValueError as exc:
+            raise ValueError("路径必须位于当前 Agent 工作目录内") from exc
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        return f"已写入 {target}"
+
+    def _append_text_file(path: str, content: str) -> str:
+        target = (ws / Path(path.strip() or ".")).resolve()
+        try:
+            target.relative_to(ws)
+        except ValueError as exc:
+            raise ValueError("路径必须位于当前 Agent 工作目录内") from exc
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as fh:
+            fh.write(content)
+        return f"已追加 {target}"
+
+    def _read_text_file(path: str) -> str:
+        target = (ws / Path(path.strip() or ".")).resolve()
+        try:
+            target.relative_to(ws)
+        except ValueError as exc:
+            raise ValueError("路径必须位于当前 Agent 工作目录内") from exc
+        return target.read_text(encoding="utf-8")
+
+    def _list_workspace_files(path: str = ".") -> str:
+        target = (ws / Path(path.strip() or ".")).resolve()
+        try:
+            target.relative_to(ws)
+        except ValueError as exc:
+            raise ValueError("路径必须位于当前 Agent 工作目录内") from exc
+        if target.is_file():
+            return str(target.relative_to(ws))
+        if not target.exists():
+            return "(empty)"
+        files = sorted(
+            str(item.relative_to(ws)) + ("/" if item.is_dir() else "")
+            for item in target.rglob("*")
+        )
+        return "\n".join(files) if files else "(empty)"
+
+    return [
+        FunctionTool(_write_text_file, name="write_text_file", description="将文本写入当前 Agent 工作目录内的文件，会覆盖已有内容。"),
+        FunctionTool(_append_text_file, name="append_text_file", description="向当前 Agent 工作目录内的文件追加文本。"),
+        FunctionTool(_read_text_file, name="read_text_file", description="读取当前 Agent 工作目录内的 UTF-8 文本文件。"),
+        FunctionTool(_list_workspace_files, name="list_workspace_files", description="列出当前 Agent 工作目录下的文件和目录。"),
+    ]
 
 
 class AutoGenOrchestrator(OrchestratorBase):
@@ -216,13 +258,15 @@ class AutoGenOrchestrator(OrchestratorBase):
         if self.config.workflow.mode == "selector":
             mc = next(iter(self.config.models.values()), None)
             client = _build_model_client(mc) if mc else None
-            return SelectorGroupChat(
-                agents,
+            selector_kwargs: dict = dict(
+                participants=agents,
                 model_client=client,
                 termination_condition=term,
-                selector_prompt=self.config.workflow.selector_prompt,
             )
-        return RoundRobinGroupChat(agents, termination_condition=term)
+            if self.config.workflow.selector_prompt:
+                selector_kwargs["selector_prompt"] = self.config.workflow.selector_prompt
+            return SelectorGroupChat(**selector_kwargs)
+        return RoundRobinGroupChat(participants=agents, termination_condition=term)
 
     async def run(self, task: str) -> AsyncIterator[AgentMessage]:
         agents = self._build_agents()
@@ -236,8 +280,12 @@ class AutoGenOrchestrator(OrchestratorBase):
             return
 
         team = self._build_team(agents)
+        stop_reason = None
         async for event in team.run_stream(task=task):
-            name = getattr(event, "source", None) or getattr(event, "name", "") or ""
+            if hasattr(event, "messages") and hasattr(event, "stop_reason"):
+                stop_reason = getattr(event, "stop_reason", None)
+                continue
+            name = getattr(event, "source", None) or ""
             content = getattr(event, "content", None)
             if content is None:
                 continue
@@ -245,7 +293,8 @@ class AutoGenOrchestrator(OrchestratorBase):
                 content = str(content)
             role = next((a.role for a in self.config.agents if a.name == name), "agent")
             yield AgentMessage(agent=name or "system", role=role, content=content)
-        yield AgentMessage("system", "system", "协作结束。", final=True)
+        reason_text = f"（{stop_reason}）" if stop_reason else ""
+        yield AgentMessage("system", "system", f"协作结束{reason_text}。", final=True)
 
     async def _run_pipeline(self, agents, task: str) -> AsyncIterator[AgentMessage]:
         running_context = task

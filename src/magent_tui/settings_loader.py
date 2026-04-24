@@ -58,33 +58,45 @@ def model_from_claude_settings() -> Optional[ModelConfig]:
     if not api_key and not base_url:
         return None
 
+    if base_url and "anthropic.com" not in base_url:
+        provider = "openai_compatible"
+    else:
+        provider = "anthropic"
+
     return ModelConfig(
-        provider="anthropic",
+        provider=provider,
         model=model,
         api_key=api_key,
         base_url=base_url,
     )
 
 
+def _detect_provider(base_url: Optional[str], default_provider: str) -> str:
+    if base_url and default_provider == "anthropic" and "anthropic.com" not in base_url:
+        return "openai_compatible"
+    return default_provider
+
+
 def default_model_config() -> ModelConfig:
-    """按优先级返回默认 ModelConfig：Claude settings → env → 占位。"""
     m = model_from_claude_settings()
     if m:
         return m
 
     if os.getenv("ANTHROPIC_API_KEY"):
+        base_url = os.getenv("ANTHROPIC_BASE_URL")
         return ModelConfig(
-            provider="anthropic",
+            provider=_detect_provider(base_url, "anthropic"),
             model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
             api_key=os.getenv("ANTHROPIC_API_KEY"),
-            base_url=os.getenv("ANTHROPIC_BASE_URL"),
+            base_url=base_url,
         )
     if os.getenv("ANTHROPIC_AUTH_TOKEN"):
+        base_url = os.getenv("ANTHROPIC_BASE_URL")
         return ModelConfig(
-            provider="anthropic",
+            provider=_detect_provider(base_url, "anthropic"),
             model=os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-5"),
             api_key=os.getenv("ANTHROPIC_AUTH_TOKEN"),
-            base_url=os.getenv("ANTHROPIC_BASE_URL"),
+            base_url=base_url,
         )
     if os.getenv("OPENAI_API_KEY"):
         return ModelConfig(
