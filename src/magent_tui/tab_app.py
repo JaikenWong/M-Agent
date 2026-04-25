@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -37,6 +39,7 @@ from .orchestrator import AgentMessage
 from .run_events import RunEvent
 from .run_service import RunService
 from .settings_loader import default_model_config, find_claude_settings, model_from_claude_settings
+from .task_state import STATUS_LABELS, Task, TaskManager, TaskStatus
 from .templates import describe_templates, instantiate_template
 
 AGENT_COLORS = ["cyan", "magenta", "green", "yellow", "blue", "red", "bright_cyan"]
@@ -48,14 +51,6 @@ def _color_for(index: int) -> str:
 
 class AgentEditScreen(ModalScreen[Optional[AgentConfig]]):
     BINDINGS = [Binding("escape", "cancel", "取消")]
-
-    DEFAULT_CSS = """
-    AgentEditScreen { align: center middle; }
-    #edit-box { width: 80%; height: 80%; border: round $accent; padding: 1 2; background: $panel; }
-    #edit-box Input, #edit-box TextArea { margin-bottom: 1; }
-    #edit-buttons { height: 3; align-horizontal: right; }
-    #edit-buttons Button { margin-left: 1; }
-    """
 
     def __init__(self, agent: Optional[AgentConfig] = None):
         super().__init__()
@@ -110,12 +105,6 @@ class AgentEditScreen(ModalScreen[Optional[AgentConfig]]):
 class TemplatePickerScreen(ModalScreen[Optional[str]]):
     BINDINGS = [Binding("escape", "cancel", "取消")]
 
-    DEFAULT_CSS = """
-    TemplatePickerScreen { align: center middle; }
-    #tpl-box { width: 70%; height: 60%; border: round $accent; padding: 1 2; background: $panel; }
-    ListView { height: 1fr; }
-    """
-
     def compose(self) -> ComposeResult:
         with Vertical(id="tpl-box"):
             yield Label("[b]选择协作模板[/b]（Enter 确认，Esc 取消）")
@@ -131,18 +120,31 @@ class TemplatePickerScreen(ModalScreen[Optional[str]]):
             self.dismiss(ev.item.id.removeprefix("tpl-"))
 
 
-class ProjectSettingsScreen(ModalScreen[Optional[AppConfig]]):
+class SessionDetailScreen(ModalScreen):
     BINDINGS = [Binding("escape", "cancel", "取消")]
 
-    DEFAULT_CSS = """
-    ProjectSettingsScreen { align: center middle; }
-    #settings-box { width: 88%; height: 88%; border: round $accent; padding: 1 2; background: $panel; }
-    #settings-box Input, #settings-box TextArea { margin-bottom: 1; }
-    #model-helpers { height: auto; margin-bottom: 1; }
-    #model-helpers Button { width: 1fr; margin-right: 1; }
-    #settings-buttons { height: 3; align-horizontal: right; }
-    #settings-buttons Button { margin-left: 1; }
-    """
+    def __init__(self, content: str):
+        super().__init__()
+        self._content = content
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="session-box"):
+            yield Label("[b]会话详情[/b]")
+            with VerticalScroll(id="session-content"):
+                yield Static(Markdown(self._content))
+            with Horizontal(id="session-buttons"):
+                yield Button("关闭", id="btn-close", variant="primary")
+
+    @on(Button.Pressed, "#btn-close")
+    def _close(self) -> None:
+        self.dismiss()
+
+    def action_cancel(self) -> None:
+        self.dismiss()
+
+
+class ProjectSettingsScreen(ModalScreen[Optional[AppConfig]]):
+    BINDINGS = [Binding("escape", "cancel", "取消")]
 
     def __init__(self, config: AppConfig):
         super().__init__()
@@ -254,35 +256,22 @@ class ProjectSettingsScreen(ModalScreen[Optional[AppConfig]]):
 
 
 class AgentPanel(VerticalScroll):
-    DEFAULT_CSS = """
-    AgentPanel { padding: 0 1; }
-    AgentPanel #agent-list { height: 1fr; margin-bottom: 1; }
-    AgentPanel .agent-item { height: auto; }
-    AgentPanel #agent-actions { height: auto; }
-    AgentPanel #agent-actions Button { width: 1fr; margin-bottom: 1; }
-    """
+    pass
 
 
 class ChatLog(VerticalScroll):
-    DEFAULT_CSS = """
-    ChatLog { padding: 0 1; }
-    ChatLog .msg { margin-bottom: 1; }
-    """
+    pass
+
+
+class TaskLog(VerticalScroll):
+    pass
 
 
 class MAgentTabApp(App):
+    CSS_PATH = "theme.tcss"
     CSS = """
     Screen { layout: vertical; }
     #tabs { height: 1fr; }
-    #chat-status { height: 3; border: round $primary; margin: 1 1 0 1; padding: 0 1; }
-    #chat-input-row { height: 5; border-top: solid $primary; padding: 0 1; }
-    #task-input { height: 3; }
-    #send-row { height: 3; }
-    #deliverable-body { height: 1fr; }
-    #deliverable-tree { width: 40%; border-right: solid $primary; }
-    #deliverable-preview { width: 1fr; padding: 0 1; }
-    #config-view { padding: 1 2; }
-    #status { dock: bottom; height: 1; background: $boost; color: $text; padding: 0 1; }
     """
 
     BINDINGS = [
@@ -299,6 +288,7 @@ class MAgentTabApp(App):
         Binding("ctrl+2", "tab_agents", "Agents"),
         Binding("ctrl+3", "tab_deliverables", "Deliverables"),
         Binding("ctrl+4", "tab_config", "Config"),
+        Binding("ctrl+5", "tab_history", "History"),
     ]
 
     status_text: reactive[str] = reactive("就绪")
@@ -312,6 +302,8 @@ class MAgentTabApp(App):
         self._selected_agent_index = 0
         self._turn_count = 0
         self._agent_status: dict[str, str] = {}
+        self._current_task: Optional[Task] = None
+        self._task_manager = TaskManager(Path(config.workspace_root) / ".tasks.json")
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -337,6 +329,8 @@ class MAgentTabApp(App):
                 with Vertical(id="config-view"):
                     yield Static("", id="config-overview")
                     yield Button("编辑项目设置", id="btn-config-edit")
+            with TabPane("History", id="tab-history"):
+                yield TaskLog(id="task-log")
         yield Static(self.status_text, id="status")
         yield Footer()
 
@@ -344,6 +338,8 @@ class MAgentTabApp(App):
         self._render_agents()
         self._render_config_overview()
         self._update_agent_status_bar()
+        self._task_manager.load()
+        self._render_task_list()
         self._log_system(
             f"欢迎使用 magent-tui · 项目 [b]{self.config.project_name}[/b]\n"
             f"当前 Agent 数: {len(self.config.agents)}，编排模式: {self.config.workflow.mode}\n"
@@ -370,6 +366,9 @@ class MAgentTabApp(App):
 
     def action_tab_config(self) -> None:
         self._set_tab("tab-config")
+
+    def action_tab_history(self) -> None:
+        self._set_tab("tab-history")
 
     def _render_agents(self) -> None:
         panel = self.query_one(AgentPanel)
@@ -556,6 +555,52 @@ class MAgentTabApp(App):
             self._selected_agent_index = idx
             self.status_text = f"当前 Agent: {self.config.agents[self._selected_agent_index].name}"
 
+    @on(ListView.Selected, "#history-list")
+    def _selected_history(self, ev: ListView.Selected) -> None:
+        if ev.item and ev.item.id:
+            task_id = ev.item.id.removeprefix("history-")
+            task = self._task_manager.get(task_id)
+            if task and task.run_dir:
+                self._show_session_detail(task)
+
+    def _show_session_detail(self, task: Task) -> None:
+        run_dir = Path(task.run_dir) if task.run_dir else None
+        if not run_dir or not run_dir.exists():
+            self.notify(f"会话目录不存在: {task.run_dir}", severity="warning")
+            return
+        events_path = run_dir / "events.jsonl"
+        if not events_path.exists():
+            self.notify(f"会话记录不存在: {events_path}", severity="warning")
+            return
+
+        detail = [f"## 任务: {task.name}", f"ID: `{task.id}`", f"状态: `{STATUS_LABELS.get(task.status)}`"]
+        if task.duration:
+            detail.append(f"耗时: `{task.duration:.1f}s`")
+        detail.extend(["", "---", "", "### 会话记录"])
+
+        try:
+            with open(events_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        event_type = data.get("event_type", "unknown")
+                        if event_type == "agent_message":
+                            agent = data.get("agent", "system")
+                            content = data.get("content", "")[:500]
+                            detail.extend(["", f"**{agent}**:", content])
+                        elif event_type in {"run_started", "run_completed", "run_failed"}:
+                            detail.append(f"*[{event_type}]*")
+                    except json.JSONDecodeError:
+                        pass
+        except Exception as exc:
+            detail.append(f"\n读取失败: {exc}")
+
+        text = "\n".join(detail)
+        self.push_screen(SessionDetailScreen(text))
+
     def action_pick_template(self) -> None:
         def _cb(name: Optional[str]) -> None:
             if not name:
@@ -654,26 +699,70 @@ class MAgentTabApp(App):
         self._refresh_tree()
         self.status_text = f"工作空间: {Path(self.config.workspace_root).resolve()}"
 
+    def _render_task_list(self) -> None:
+        log = self.query_one(TaskLog)
+        log.remove_children()
+        tasks = self._task_manager.list()
+        if not tasks:
+            log.mount(Static("[dim]还没有历史任务。[/dim]"))
+            return
+        items = []
+        for task in tasks:
+            status_label = STATUS_LABELS.get(task.status, str(task.status))
+            color = "green" if task.status == TaskStatus.DONE else "red" if task.status == TaskStatus.FAILED else "yellow"
+            duration_str = f"{task.duration:.1f}s" if task.duration else "-"
+            text = Text()
+            text.append(f"{status_label}  ", style=f"bold {color}")
+            text.append(f"{task.name}\n", style="bold")
+            text.append(f"  ID: {task.id} | 耗时: {duration_str}", style="dim")
+            if task.run_dir:
+                text.append(f" | 目录: {task.run_dir}", style="dim")
+            item = ListItem(Static(text), id=f"history-{task.id}", classes="task-item")
+            if task.run_dir:
+                item.set_class(True, "has-session")
+            items.append(item)
+        lv = ListView(*items, id="history-list")
+        lv.border_title = "历史任务（点击查看会话）"
+        log.mount(lv)
+
     @work(exclusive=True)
-    async def _run_task(self, task: str) -> None:
+    async def _run_task(self, task_prompt: str) -> None:
         self._task_running = True
         self._turn_count = 0
         self._agent_status = {a.name: "waiting" for a in self.config.agents}
         self._update_agent_status_bar()
+
+        task_name = task_prompt[:50] + ("..." if len(task_prompt) > 50 else "")
+        task = Task(
+            id=f"task_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            name=task_name,
+            prompt=task_prompt,
+        )
+        self._current_task = task
+        self._task_manager.add(task)
+        task.start()
+
         self.status_text = "运行中..."
-        self._log_system(f"📋 **任务**: {task}")
+        self._log_system(f"📋 **任务**: {task_prompt}")
         service = RunService(self.config)
         try:
-            async for event in service.run(task):
+            async for event in service.run(task_prompt):
+                if event.event_type == "run_started":
+                    task.run_dir = event.metadata.get("run_dir")
                 self._consume_event(event)
                 await asyncio.sleep(0)
+            task.finish(success=True)
             self._refresh_tree()
             self.status_text = "✓ 完成"
         except Exception as exc:
+            task.finish(success=False, error=str(exc))
             self._log_system(f"❌ 运行出错: `{exc}`")
             self.status_text = "运行出错"
         finally:
+            self._task_manager.save()
+            self._render_task_list()
             self._task_running = False
+            self._current_task = None
             for name in list(self._agent_status):
                 if self._agent_status[name] != "error":
                     self._agent_status[name] = "done"

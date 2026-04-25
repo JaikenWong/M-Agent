@@ -1,0 +1,442 @@
+$bg-dark: #1a1b26;
+$bg-panel: #24283b;
+$bg-boost: #292e42;
+$border-primary: #7aa2f7;
+$border-accent: #bb9af7;
+$border-success: #9ece6a;
+$border-warning: #e0af68;
+$border-error: #f7768e;
+$text-primary: #c0caf5;
+$text-secondary: #a9b1d6;
+$text-muted: #565f89;
+$text-success: #9ece6a;
+$text-warning: #e0af68;
+$text-error: #f7768e;
+$agent-pm: #7aa2f7;
+$agent-architect: #bb9af7;
+$agent-engineer: #9ece6a;
+$agent-qa: #e0af68;
+$agent-research: #7dcfff;
+$agent-editor: #f7768e;
+
+Screen {
+    background: $bg-dark;
+    color: $text-primary;
+}
+
+Header {
+    background: $bg-panel;
+    color: $text-primary;
+    border-bottom: solid $border-primary;
+}
+
+Footer {
+    background: $bg-boost;
+    color: $text-secondary;
+}
+
+Footer > .footer--highlight {
+    background: $border-primary;
+    color: $bg-dark;
+}
+
+TabbedContent {
+    background: $bg-dark;
+}
+
+TabbedContent Tabs {
+    background: $bg-panel;
+    border-bottom: solid $border-primary;
+}
+
+TabbedContent Tab {
+    background: $bg-dark;
+    color: $text-muted;
+    padding: 0 2;
+}
+
+TabbedContent Tab.-active {
+    background: $bg-dark;
+    color: $text-primary;
+    border-bottom: solid $border-primary;
+}
+
+VerticalScroll:focus-within {
+    border: none;
+}
+
+ChatLog {
+    padding: 1 2;
+    background: $bg-dark;
+}
+
+ChatLog .msg {
+    margin-bottom: 1;
+    padding: 1 2;
+    border-left: heavy $border-primary;
+    background: $bg-panel;
+}
+
+ChatLog .msg-system {
+    border-left: heavy $text-muted;
+    background: $bg-boost;
+    color: $text-secondary;
+    padding: 0 2;
+    margin-bottom: 1;
+}
+
+#chat-status {
+    height: 3;
+    border: round $border-primary;
+    margin: 1 1 0 1;
+    padding: 0 1;
+    background: $bg-panel;
+    color: $text-primary;
+}
+
+#chat-input-row {
+    height: 5;
+    border-top: solid $border-primary;
+    padding: 0 1;
+    background: $bg-panel;
+}
+
+#task-input {
+    height: 3;
+    background: $bg-dark;
+    border: solid $border-primary;
+    color: $text-primary;
+}
+
+#task-input:focus {
+    border: solid $border-accent;
+}
+
+#send-row {
+    height: 3;
+}
+
+#send-row Label {
+    color: $text-muted;
+}
+
+AgentPanel {
+    padding: 0 1;
+    background: $bg-dark;
+}
+
+#agent-list {
+    height: 1fr;
+    margin-bottom: 1;
+    background: $bg-dark;
+}
+
+.agent-item {
+    height: auto;
+    padding: 1;
+    margin: 0 0 1 0;
+    background: $bg-panel;
+    border-left: heavy $agent-engineer;
+}
+
+.agent-item:hover {
+    background: $bg-boost;
+}
+
+#agent-actions {
+    height: auto;
+    padding: 1;
+    background: $bg-panel;
+    border-top: solid $border-primary;
+}
+
+#agent-actions Button {
+    width: 1fr;
+    margin-bottom: 1;
+    background: $bg-boost;
+    border: solid $border-primary;
+    color: $text-primary;
+}
+
+#agent-actions Button:hover {
+    background: $border-primary;
+    color: $bg-dark;
+}
+
+#agent-actions Button.-primary {
+    background: $border-accent;
+    border: solid $border-accent;
+    color: $bg-dark;
+}
+
+#deliverable-body {
+    height: 1fr;
+    background: $bg-dark;
+}
+
+#deliverable-tree {
+    width: 40%;
+    border-right: solid $border-primary;
+    background: $bg-panel;
+}
+
+DirectoryTree {
+    background: $bg-panel;
+    color: $text-primary;
+}
+
+DirectoryTree .directory-tree--folder {
+    color: $border-primary;
+}
+
+DirectoryTree .directory-tree--file {
+    color: $text-primary;
+}
+
+#deliverable-preview {
+    width: 1fr;
+    padding: 1 2;
+    background: $bg-panel;
+    border-left: solid $border-primary;
+}
+
+#config-view {
+    padding: 1 2;
+    background: $bg-dark;
+}
+
+#config-overview {
+    padding: 1;
+    background: $bg-panel;
+    border: round $border-primary;
+}
+
+#status {
+    dock: bottom;
+    height: 1;
+    background: $bg-boost;
+    color: $text-primary;
+    padding: 0 1;
+    border-top: solid $border-primary;
+}
+
+ModalScreen {
+    background: $bg-dark 90%;
+}
+
+#edit-box, #tpl-box, #settings-box {
+    width: 80%;
+    height: 80%;
+    border: round $border-accent;
+    padding: 1 2;
+    background: $bg-panel;
+    box-shadow: heavy;
+}
+
+#edit-box Input, #edit-box TextArea,
+#settings-box Input, #settings-box TextArea {
+    margin-bottom: 1;
+    background: $bg-dark;
+    border: solid $border-primary;
+    color: $text-primary;
+}
+
+#edit-box Input:focus, #edit-box TextArea:focus,
+#settings-box Input:focus, #settings-box TextArea:focus {
+    border: solid $border-accent;
+}
+
+AgentEditScreen, TemplatePickerScreen, ProjectSettingsScreen, SessionDetailScreen {
+    align: center middle;
+}
+
+#session-box {
+    width: 90%;
+    height: 90%;
+    border: round $border-accent;
+    padding: 1 2;
+    background: $bg-panel;
+    box-shadow: heavy;
+}
+
+#session-content {
+    height: 1fr;
+    background: $bg-dark;
+    padding: 1;
+    margin: 1 0;
+    border: solid $border-primary;
+}
+
+#session-buttons {
+    height: 3;
+    align-horizontal: right;
+    margin-top: 1;
+    padding-top: 1;
+    border-top: solid $border-primary;
+}
+
+TaskLog {
+    padding: 1 2;
+    background: $bg-dark;
+}
+
+TaskLog #history-list {
+    height: 1fr;
+    background: $bg-dark;
+}
+
+TaskLog .task-item {
+    background: $bg-panel;
+    padding: 1;
+    margin-bottom: 1;
+    border-left: heavy $border-primary;
+}
+
+TaskLog .task-item.has-session {
+    border-left: heavy $border-accent;
+}
+
+#edit-buttons, #settings-buttons {
+    height: 3;
+    align-horizontal: right;
+    margin-top: 1;
+    padding-top: 1;
+    border-top: solid $border-primary;
+}
+
+Button {
+    background: $bg-boost;
+    border: solid $border-primary;
+    color: $text-primary;
+}
+
+Button:hover {
+    background: $border-primary;
+    color: $bg-dark;
+}
+
+Button.-primary {
+    background: $border-accent;
+    border: solid $border-accent;
+    color: $bg-dark;
+}
+
+Button.-success {
+    background: $border-success;
+    border: solid $border-success;
+    color: $bg-dark;
+}
+
+Button.-warning {
+    background: $border-warning;
+    border: solid $border-warning;
+    color: $bg-dark;
+}
+
+Button.-error {
+    background: $border-error;
+    border: solid $border-error;
+    color: $bg-dark;
+}
+
+ListView {
+    background: $bg-dark;
+    border: none;
+}
+
+ListView:focus {
+    border: none;
+}
+
+ListItem {
+    background: $bg-panel;
+    margin: 0 0 1 0;
+    border-left: heavy $border-primary;
+}
+
+ListItem:hover {
+    background: $bg-boost;
+}
+
+ListItem.-selected {
+    background: $bg-boost;
+    border-left: heavy $border-accent;
+}
+
+Label {
+    color: $text-primary;
+}
+
+Static {
+    color: $text-primary;
+}
+
+Input {
+    background: $bg-dark;
+    border: solid $border-primary;
+    color: $text-primary;
+}
+
+Input:focus {
+    border: solid $border-accent;
+}
+
+TextArea {
+    background: $bg-dark;
+    border: solid $border-primary;
+    color: $text-primary;
+}
+
+TextArea:focus {
+    border: solid $border-accent;
+}
+
+AgentEditScreen, TemplatePickerScreen, ProjectSettingsScreen, SessionDetailScreen {
+    align: center middle;
+}
+
+#session-box {
+    width: 90%;
+    height: 90%;
+    border: round $border-accent;
+    padding: 1 2;
+    background: $bg-panel;
+    box-shadow: heavy;
+}
+
+#session-content {
+    height: 1fr;
+    background: $bg-dark;
+    padding: 1;
+    margin: 1 0;
+    border: solid $border-primary;
+}
+
+#session-buttons {
+    height: 3;
+    align-horizontal: right;
+    margin-top: 1;
+    padding-top: 1;
+    border-top: solid $border-primary;
+}
+
+TaskLog {
+    padding: 1 2;
+    background: $bg-dark;
+}
+
+TaskLog #history-list {
+    height: 1fr;
+    background: $bg-dark;
+}
+
+TaskLog .task-item {
+    background: $bg-panel;
+    padding: 1;
+    margin-bottom: 1;
+    border-left: heavy $border-primary;
+}
+
+TaskLog .task-item.has-session {
+    border-left: heavy $border-accent;
+}
