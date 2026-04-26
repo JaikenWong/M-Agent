@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import AsyncIterator, Optional
+from typing import AsyncIterator, Callable, Optional
 
 from .config_models import AgentConfig, AppConfig, ModelConfig
 from .workspace_tools import WorkspaceToolset
@@ -209,9 +209,10 @@ def _build_tools_for_agent(workspace_root: Path, agent: AgentConfig):
 
 
 class AutoGenOrchestrator(OrchestratorBase):
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, event_callback: Optional[Callable] = None):
         self.config = config
         self._workspace_root: Path = config.ensure_workspace()
+        self._event_callback = event_callback
 
     def _build_agents(self):
         from autogen_agentchat.agents import AssistantAgent  # type: ignore
@@ -225,12 +226,29 @@ class AutoGenOrchestrator(OrchestratorBase):
                 f"{a.system_prompt}\n\n"
                 f"[你的工作目录]: {workspace_path}\n"
                 f"[角色]: {a.role}\n"
-                "[可用工具]: write_text_file / append_text_file / read_text_file / list_workspace_files\n"
+            )
+            tool_names = "write_text_file / append_text_file / read_text_file / list_workspace_files"
+            if "claude_agent" in a.tools:
+                tool_names += " / claude_agent"
+                system += (
+                    "\n[特殊工具]: claude_agent — 当你需要编写、修改、调试实际代码时，"
+                    "调用此工具并传入详细实现指令。Claude Agent 会在项目目录中执行代码工程。\n"
+                )
+            system += (
+                f"[可用工具]: {tool_names}\n"
                 "所有过程稿、分析稿、代码片段、交付件优先写入你的工作目录。\n"
                 "请用中文回复。不需要继续时回复 `TERMINATE`。"
             )
             kwargs = {}
             tools = _build_tools_for_agent(self._workspace_root, a)
+            if "claude_agent" in a.tools:
+                from .claude_agent import ClaudeAgentTool
+                claude_tool = ClaudeAgentTool(
+                    cwd=self._workspace_root / a.resolved_workspace(),
+                    event_callback=self._event_callback,
+                    agent_name=f"{a.name}_ClaudeAgent",
+                )
+                tools.append(claude_tool.as_function_tool())
             if tools:
                 kwargs["tools"] = tools
             agents.append(
@@ -298,14 +316,34 @@ class AutoGenOrchestrator(OrchestratorBase):
 
     async def _run_pipeline(self, agents, task: str) -> AsyncIterator[AgentMessage]:
         running_context = task
+        predecessor_summaries: list[str] = []
         for agent in agents:
+            predecessor_info = ""
+            if predecessor_summaries:
+                predecessor_info = (
+                    "\n\n## 前序阶段产出\n\n"
+                    + "\n".join(predecessor_summaries)
+                    + "\n\n你可以用 read_text_file / list_workspace_files 工具读取前序 Agent 工作目录中的文件获取详细信息。"
+                )
             prompt = (
                 f"{running_context}\n\n"
-                "你处于 pipeline 协作模式，请只完成你当前阶段，并尽量写入工作目录。"
+                "你处于 pipeline 协作模式，请只完成你当前阶段，将产出写入你的工作目录。"
+                f"{predecessor_info}"
             )
             async for msg in self._run_single(agent, prompt):
                 yield msg
                 running_context = f"{running_context}\n\n[{agent.name} 输出]\n{msg.content}"
+            # 收集此 agent 的产物文件清单供后续 agent 参考
+            agent_ws = self._workspace_root / self._agent_workspace_name(agent)
+            if agent_ws.exists():
+                files = sorted(
+                    str(p.relative_to(agent_ws)) for p in agent_ws.rglob("*") if p.is_file()
+                )
+                if files:
+                    predecessor_summaries.append(
+                        f"### {agent.name} 工作目录 ({agent_ws.name}/)\n"
+                        + "\n".join(f"- `{f}`" for f in files)
+                    )
             missing = _missing_required_artifacts(self.config, self._workspace_root, agent.name)
             if missing:
                 yield AgentMessage(
@@ -316,6 +354,10 @@ class AutoGenOrchestrator(OrchestratorBase):
                 )
                 return
         yield AgentMessage("system", "system", "协作结束（pipeline）。", final=True)
+
+    def _agent_workspace_name(self, agent) -> str:
+        cfg_agent = next((a for a in self.config.agents if a.name == agent.name), None)
+        return cfg_agent.resolved_workspace() if cfg_agent else agent.name
 
     async def _run_single(self, agent, task: str) -> AsyncIterator[AgentMessage]:
         from autogen_agentchat.messages import TextMessage  # type: ignore
@@ -335,7 +377,7 @@ class AutoGenOrchestrator(OrchestratorBase):
 
 # --------------------------- Factory ---------------------------
 
-def build_orchestrator(config: AppConfig) -> OrchestratorBase:
+def build_orchestrator(config: AppConfig, event_callback: Optional[Callable] = None) -> OrchestratorBase:
     """根据环境选择真实或 mock 编排器。"""
     try:
         import autogen_agentchat  # noqa: F401
@@ -360,6 +402,6 @@ def build_orchestrator(config: AppConfig) -> OrchestratorBase:
             )
 
     try:
-        return AutoGenOrchestrator(config)
+        return AutoGenOrchestrator(config, event_callback=event_callback)
     except Exception as e:
         return MockOrchestrator(config, reason=f"初始化 AutoGen 失败: {e}")

@@ -104,11 +104,21 @@ def run_doctor(config_path: str | None = None) -> list[DoctorCheck]:
         _module_check("autogen_agentchat"),
         _module_check("autogen_core"),
         _module_check("autogen_ext"),
+        _module_check("fastapi"),
+        _module_check("uvicorn"),
+        _module_check("websockets"),
         config_check,
         _claude_settings_check(),
         *_env_check(),
         *_model_checks(cfg),
     ]
+    # Optional deps: don't fail if missing
+    for mod in ("claude_agent_sdk",):
+        c = _module_check(mod)
+        if not c.ok:
+            c.detail = f"{mod} (optional) not installed"
+            c.ok = True
+        checks.append(c)
     return checks
 
 

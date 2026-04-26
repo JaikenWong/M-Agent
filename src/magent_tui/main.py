@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import signal
 import sys
 from pathlib import Path
 from typing import Optional
@@ -43,6 +45,19 @@ def _build_default_config(template: Optional[str] = None) -> AppConfig:
     )
 
 
+def _load_config(config_path: Optional[str], template: Optional[str] = None) -> tuple[AppConfig, Optional[Path]]:
+    if config_path:
+        path = Path(config_path)
+        if not path.exists():
+            print(f"❌ 配置文件不存在: {path}")
+            sys.exit(2)
+        cfg = AppConfig.from_yaml(path)
+        return cfg, path
+    tpl = template or "dev_team_oob"
+    cfg = _build_default_config(tpl)
+    return cfg, None
+
+
 def cmd_templates(_: argparse.Namespace) -> int:
     print("可用模板：\n")
     for name, desc in describe_templates():
@@ -67,25 +82,60 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_run(args: argparse.Namespace) -> int:
-    if args.config:
-        path = Path(args.config)
-        if not path.exists():
-            print(f"❌ 配置文件不存在: {path}")
-            return 2
-        cfg = AppConfig.from_yaml(path)
-    else:
-        cfg = _build_default_config("dev_team_oob")
-        path = None
-        print("ℹ 未指定 --config，使用内置 dev_team_oob 模板启动。")
-
+def _fix_model_fallback(cfg: AppConfig) -> None:
     for key, m in list(cfg.models.items()):
         if not m.resolved_api_key() and not m.base_url:
-            fallback = default_model_config()
-            cfg.models[key] = fallback
+            cfg.models[key] = default_model_config()
+
+
+async def _headless_run(cfg: AppConfig, task: str) -> int:
+    """无头模式：终端流式输出，不启动 TUI。"""
+    from .run_service import RunService
+
+    svc = RunService(cfg)
+    cancel_event = asyncio.Event()
+
+    def _sig_handler() -> None:
+        cancel_event.set()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(sig, _sig_handler)
+
+    print(f"\n🚀 任务: {task}\n   模式: {cfg.workflow.mode} | Agent 数: {len(cfg.agents)}\n")
+    try:
+        async for event in svc.run(task):
+            if cancel_event.is_set():
+                print("\n⚠ 已取消")
+                break
+            if event.event_type == "agent_message" and event.agent and event.agent != "system":
+                role_tag = f"({event.role})" if event.role else ""
+                print(f"\n● {event.agent} {role_tag}:")
+                print(f"  {event.content}")
+            elif event.event_type == "agent_message" and event.agent == "system":
+                print(f"\n[System] {event.content}")
+            elif event.event_type == "run_completed":
+                print("\n✓ 完成")
+            elif event.event_type == "run_failed":
+                print(f"\n✗ 失败: {event.content}")
+                return 1
+    except KeyboardInterrupt:
+        print("\n⚠ 已取消")
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    cfg, path = _load_config(args.config, getattr(args, "template", None))
+    _fix_model_fallback(cfg)
+
+    task = getattr(args, "task", None)
+    if task:
+        if not cfg.agents:
+            print("❌ 没有 Agent，请通过 --template 指定模板或 --config 指定配置。")
+            return 2
+        return asyncio.run(_headless_run(cfg, task))
 
     from .tab_app import run_app
-
     run_app(cfg, path)
     return 0
 
@@ -96,12 +146,25 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    cfg, path = _load_config(args.config, getattr(args, "template", None))
+    _fix_model_fallback(cfg)
+
+    import uvicorn
+    from .server import create_app
+    app = create_app(cfg)
+    uvicorn.run(app, host=args.host, port=args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser("magent-tui", description="多智能体协作 TUI")
     sub = p.add_subparsers(dest="cmd")
 
-    p_run = sub.add_parser("run", help="启动 TUI")
+    p_run = sub.add_parser("run", help="启动 TUI 或无头执行任务")
     p_run.add_argument("-c", "--config", help="YAML 配置路径")
+    p_run.add_argument("-t", "--task", help="直接执行任务（无头模式，不启动 TUI）")
+    p_run.add_argument("--template", help="使用的模板名（无 --config 时生效）")
     p_run.set_defaults(func=cmd_run)
 
     p_init = sub.add_parser("init", help="生成默认配置 YAML")
@@ -115,6 +178,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor = sub.add_parser("doctor", help="检查依赖、配置与模型环境")
     p_doctor.add_argument("-c", "--config", help="YAML 配置路径")
     p_doctor.set_defaults(func=cmd_doctor)
+
+    p_serve = sub.add_parser("serve", help="启动 FastAPI 服务器")
+    p_serve.add_argument("--host", default="127.0.0.1", help="监听地址")
+    p_serve.add_argument("--port", type=int, default=8765, help="监听端口")
+    p_serve.add_argument("-c", "--config", help="YAML 配置路径")
+    p_serve.add_argument("--template", help="使用的模板名")
+    p_serve.set_defaults(func=cmd_serve)
 
     return p
 

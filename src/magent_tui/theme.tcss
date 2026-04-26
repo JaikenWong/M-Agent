@@ -230,7 +230,7 @@ ModalScreen {
     border: round $border-accent;
     padding: 1 2;
     background: $bg-panel;
-    box-shadow: heavy;
+
 }
 
 #edit-box Input, #edit-box TextArea,
@@ -256,7 +256,7 @@ AgentEditScreen, TemplatePickerScreen, ProjectSettingsScreen, SessionDetailScree
     border: round $border-accent;
     padding: 1 2;
     background: $bg-panel;
-    box-shadow: heavy;
+
 }
 
 #session-content {
@@ -401,7 +401,7 @@ AgentEditScreen, TemplatePickerScreen, ProjectSettingsScreen, SessionDetailScree
     border: round $border-accent;
     padding: 1 2;
     background: $bg-panel;
-    box-shadow: heavy;
+
 }
 
 #session-content {
