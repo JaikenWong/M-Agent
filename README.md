@@ -15,6 +15,10 @@
 - 每次运行会把会话流和过程产物自动落盘
 - 运行链路通过 `RunService` 输出统一事件流，便于 UI、日志与回放共用
 - 带 TUI 界面，适合边配边跑
+- **支持 Claude Agent SDK 集成，可执行真实代码工程**
+- **支持 FastAPI 服务器，提供 REST + WebSocket 实时事件流**
+- **支持 Tauri 桌面应用，提供跨平台桌面 GUI**
+- **支持无头模式，可直接执行任务并输出到终端**
 
 ## 目录
 
@@ -44,8 +48,14 @@ python3 -m pip install -e .
 如果你后面需要额外能力，也可以安装可选依赖：
 
 ```bash
-python3 -m pip install -e ".[litellm,anthropic]"
+python3 -m pip install -e ".[litellm,anthropic,claude-agent]"
 ```
+
+**可选依赖说明：**
+
+- `litellm` - LiteLLM 客户端，支持更多模型提供商
+- `anthropic` - Anthropic SDK（已内置，可选安装最新版）
+- `claude-agent` - Claude Agent SDK，用于代码工程任务（`claude_agent` 工具）
 
 安装完成后确认 CLI 可用：
 
@@ -248,11 +258,16 @@ Ctrl+S
 
 ### `magent-tui run`
 
-启动 TUI。
+启动 TUI 或无头执行任务。
 
 ```bash
+# 启动 TUI
 magent-tui run
 magent-tui run --config configs/default.yaml
+
+# 无头模式：直接执行任务，输出到终端
+magent-tui run --task "帮我写一个用户注册系统的PRD"
+magent-tui run --task "设计微服务架构" --template dev_team_oob
 ```
 
 行为说明：
@@ -260,6 +275,33 @@ magent-tui run --config configs/default.yaml
 - 不传 `--config` 时，自动用内置 `dev_team_oob` 模板启动
 - 传了 `--config` 时，优先读取 YAML
 - 如果配置中的模型没有显式 API 信息，运行时会尝试回退到 Claude settings 或环境变量
+- `--task` 模式下不启动 TUI，直接执行任务并输出结果
+
+### `magent-tui serve`
+
+启动 FastAPI 服务器，提供 REST API 和 WebSocket 实时事件流。
+
+```bash
+magent-tui serve
+magent-tui serve --host 0.0.0.0 --port 8765
+magent-tui serve --config configs/default.yaml
+```
+
+API 端点：
+
+- `GET /api/config` - 获取当前配置
+- `PUT /api/config` - 更新配置
+- `GET /api/templates` - 列出可用模板
+- `POST /api/templates/{name}/apply` - 应用模板
+- `GET /api/agents` - 获取 Agent 列表
+- `POST /api/agents` - 添加 Agent
+- `DELETE /api/agents/{index}` - 删除 Agent
+- `GET /api/workspace/tree` - 获取工作目录树
+- `GET /api/workspace/file` - 读取文件
+- `GET /api/tasks` - 获取任务列表
+- `GET /api/runs` - 获取运行记录
+- `GET /api/runs/{run_id}/events` - 获取运行事件流
+- `WebSocket /ws` - WebSocket 连接，接收实时事件
 
 ### `magent-tui init`
 
@@ -285,6 +327,71 @@ magent-tui templates
 magent-tui doctor
 magent-tui doctor --config configs/default.yaml
 ```
+
+## 多 Agent 协同能力
+
+本项目实现了完整的多 Agent 协同工作流，支持：
+
+### 1. 多种编排模式
+
+- **`round_robin`** - 固定轮转，按顺序让每个 Agent 发言
+- **`selector`** - LLM 选择下一位发言者，更智能的协作
+- **`single`** - 单 Agent 模式，快速验证单个角色
+- **`pipeline`** - 阶段式协作，前序 Agent 产物传递给后序 Agent
+
+### 2. Agent 工作流
+
+每个 Agent 可独立配置：
+- **角色与职责** - 通过 `role` 和 `system_prompt` 定义
+- **工作目录** - 每个Agent有独立交付件目录
+- **模型选择** - 可为每个Agent指定不同模型
+- **工具集** - 支持文件读写、Claude Agent SDK 等
+
+### 3. 真实代码工程能力
+
+通过 **Claude Agent SDK** 集成，Agent 可执行：
+- 文件读写（`write_text_file` / `read_text_file`）
+- 代码编辑（`Edit` 工具）
+- 命令执行（`Bash` 工具）
+- 代码搜索（`Grep` / `Glob`）
+
+配置 Agent 使用 `claude_agent` 工具：
+
+```yaml
+agents:
+  - name: Engineer
+    role: 工程师
+    tools: ["claude_agent"]  # 启用 Claude Agent SDK
+    system_prompt: |
+      你是资深工程师。
+      当需要编写、修改、调试实际代码时，使用 claude_agent 工具。
+```
+
+### 4. 阶段式 Pipeline 模式
+
+Pipeline 模式下，每个阶段自动获得前序阶段的产物摘要：
+
+```yaml
+workflow:
+  mode: pipeline
+  required_artifacts:  # 可选：门禁条件
+    - "Engineer/implementation.md"
+```
+
+### 5. 实时事件流
+
+所有运行事件通过 `RunService` 输出：
+- `run_started` - 运行开始
+- `agent_message` - Agent 消息
+- `run_completed` / `run_failed` - 运行结束
+- 可用于 TUI、日志、回放、Web 前端
+
+### 6. 可扩展架构
+
+- **插件化工具** - 易于添加新工具（Git、数据库、API 等）
+- **模板系统** - 内置多种场景模板，支持自定义
+- **配置驱动** - YAML 配置，无需修改代码
+- **事件驱动** - 统一事件流，便于集成
 
 ## TUI 怎么用
 
@@ -628,10 +735,39 @@ magent-tui init --template dev_delivery -o configs/dev.yaml
 如果你只是想确认真实 Agent 能往工作目录写文件，可以在单 Agent 或 `dev_delivery` 模板下先试一条非常短的任务：
 
 ```text
-请调用 write_text_file，把文本“hello from agent”写入 smoke.md，然后回复 done。
+请调用 write_text_file，把文本”hello from agent”写入 smoke.md，然后回复 done。
 ```
 
 跑完后去对应 Agent 的工作目录查看 `smoke.md` 是否生成。
+
+### 示例 6：使用 Claude Agent 执行代码工程
+
+在 `Engineer` Agent 中启用 `claude_agent` 工具，执行真实代码开发：
+
+```yaml
+agents:
+  - name: Engineer
+    role: 工程师
+    tools: [“claude_agent”]
+    system_prompt: |
+      你是资深工程师。
+      当需要编写、修改、调试实际代码时，使用 claude_agent 工具。
+      传入详细实现指令，Claude Agent 将在项目目录中执行代码工程。
+```
+
+任务示例：
+
+```text
+请使用 claude_agent 工具，实现一个用户注册模块：
+1. 创建数据模型
+2. 实现 API 路由
+3. 添加验证逻辑
+4. 编写单元测试
+
+要求：所有代码写入 deliverables/Engineer/ 目录。
+```
+
+Claude Agent 会自动执行文件读写、代码编辑、测试运行等操作。
 
 ## 运行产物
 
@@ -715,7 +851,17 @@ magent-tui doctor --config configs/default.yaml
 magent-tui doctor --config configs/default.yaml
 ```
 
-### 2. Claude settings 里明明有模型，为什么还跑不起来
+### 2. Claude Agent SDK 没安装怎么办
+
+Claude Agent SDK 是可选依赖：
+
+```bash
+pip install claude-agent-sdk
+```
+
+安装后，在 Agent 配置中添加 `tools: ["claude_agent"]` 即可使用。
+
+### 3. Claude settings 里明明有模型，为什么还跑不起来
 
 先确认你的 `settings.json` 里是否真的包含这些字段之一：
 
@@ -757,7 +903,38 @@ python3 -m pip install -e .
 - 多 Agent 工作流原型
 - 本地 TUI 多智能体调度台
 - 带交付件目录的 AutoGen 实验项目
-- 继续往上做“角色市场 / 模板市场 / 工具集成 / 文件编辑代理”的基础工程
+- 继续往上做”角色市场 / 模板市场 / 工具集成 / 文件编辑代理”的基础工程
+- **使用 Claude Agent SDK 进行真实代码工程**
+- **搭建多智能体协作的 Web 应用或桌面应用**
+
+### 6. 如何开发 Tauri 桌面应用
+
+项目包含完整的 Tauri 桌面应用：
+
+```bash
+# 安装依赖
+npm install
+
+# 开发模式
+npm run tauri dev
+
+# 构建生产版本
+npm run tauri build
+```
+
+前端使用 React + TypeScript + Tailwind CSS，通过 WebSocket 连接到 FastAPI 服务器。
+
+### 7. 如何开发 Web 前端
+
+项目使用 Vite 构建：
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+API 调用通过 `/api/*` 端点，WebSocket 连接 `/ws` 端点。
 
 ## 开发建议
 
@@ -768,6 +945,8 @@ python3 -m pip install -e .
 3. 增加并维持自动化测试，覆盖配置解析、运行产物和 doctor 输出
 4. 增加会话持久化和历史回放
 5. 增加模板导入导出
+6. 完善 Web 前端和 Tauri 桌面应用的 UI/UX
+7. 添加更多 Claude Agent 工具场景（数据库、API 集成等）
 
 ## 许可证
 
