@@ -173,3 +173,16 @@ class TaskManager:
         with open(self._storage_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         self._tasks = {tid: Task.from_dict(tdata) for tid, tdata in data.items()}
+
+    def reconcile_stale_active_on_load(self) -> int:
+        """服务重启后，持久化里仍处于 active 的任务不属本次进程，标为 failed。"""
+        n = 0
+        for t in list(self._tasks.values()):
+            if t.is_active:
+                t.status = TaskStatus.FAILED
+                t.finished_at = datetime.now()
+                t.error_message = t.error_message or "进程已重启，任务已中断；若已跑完可忽略本提示"
+                n += 1
+        if n:
+            self.save()
+        return n

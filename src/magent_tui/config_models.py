@@ -19,14 +19,57 @@ class ModelConfig(BaseModel):
     max_tokens: Optional[int] = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
-    def resolved_api_key(self) -> Optional[str]:
+    def resolved_api_key(self, merge_claude_code_settings: bool = True) -> Optional[str]:
+        """api_key 优先；否则（merge 为真）从合并的 Claude settings 读 env/顶层，再回退到进程环境变量。"""
         import os
 
         if self.api_key:
             return self.api_key
+        if not merge_claude_code_settings:
+            if self.provider == "anthropic":
+                return os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")
+            if self.provider in ("openai", "openai_compatible", "litellm"):
+                return os.getenv("OPENAI_API_KEY")
+            return os.getenv("OPENAI_API_KEY")
         if self.provider == "anthropic":
-            return os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN")
+            from .settings_loader import anthropic_key_from_merged_settings
+
+            return (
+                anthropic_key_from_merged_settings()
+                or os.getenv("ANTHROPIC_API_KEY")
+                or os.getenv("ANTHROPIC_AUTH_TOKEN")
+            )
+        if self.provider in ("openai", "openai_compatible", "litellm"):
+            from .settings_loader import openai_key_from_merged_settings
+
+            return openai_key_from_merged_settings() or os.getenv("OPENAI_API_KEY")
         return os.getenv("OPENAI_API_KEY")
+
+    def resolved_base_url(self, merge_claude_code_settings: bool = True) -> Optional[str]:
+        """与 resolved_api_key 相同的三段：显式 / 合并 settings / 环境变量。"""
+        import os
+
+        b = (self.base_url or "").strip()
+        if b:
+            return b
+        if not merge_claude_code_settings:
+            if self.provider == "anthropic":
+                s = (os.getenv("ANTHROPIC_BASE_URL") or "").strip()
+                return s or None
+            s = (os.getenv("OPENAI_BASE_URL") or "").strip()
+            return s or None
+        if self.provider == "anthropic":
+            from .settings_loader import anthropic_base_url_from_merged_settings
+
+            s = (anthropic_base_url_from_merged_settings() or os.getenv("ANTHROPIC_BASE_URL") or "").strip()
+            return s or None
+        if self.provider in ("openai", "openai_compatible", "litellm"):
+            from .settings_loader import openai_base_url_from_merged_settings
+
+            s = (openai_base_url_from_merged_settings() or os.getenv("OPENAI_BASE_URL") or "").strip()
+            return s or None
+        s = (os.getenv("OPENAI_BASE_URL") or "").strip()
+        return s or None
 
     def summary(self) -> str:
         provider = self.provider
@@ -64,6 +107,13 @@ class WorkflowConfig(BaseModel):
     termination_keywords: list[str] = Field(default_factory=lambda: ["TERMINATE", "任务完成"])
     selector_prompt: Optional[str] = None
     required_artifacts: dict[str, list[str]] = Field(default_factory=dict)
+    liaison_agent: Optional[str] = Field(
+        default=None,
+        description=(
+            "对用户的总接口：须与 `agents` 中某 `name` 一致（常设为 PM）。"
+            "不自动改编排逻辑；用于约定「谁用自然语言向用户汇报、要澄清、收反馈」。"
+        ),
+    )
 
 
 class AppConfig(BaseModel):
@@ -71,6 +121,14 @@ class AppConfig(BaseModel):
 
     project_name: str = "m-agent"
     workspace_root: str = "deliverables"
+    use_claude_code_settings: bool = Field(
+        default=True,
+        description=(
+            "为 True：与 Claude Code 一致，从 ~/.claude 等合并后的 settings 注入 models.default，"
+            "并对缺凭据的模型项用 default_model_config 补全（含读 settings）。"
+            "为 False：仅使用本 YAML + 进程环境变量（ANTHROPIC_* 等），不读取 Claude Code 的 settings 文件。"
+        ),
+    )
     default_model: str = "default"
     models: dict[str, ModelConfig] = Field(default_factory=dict)
     agents: list[AgentConfig] = Field(default_factory=list)

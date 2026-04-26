@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import Body, FastAPI, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -17,10 +18,105 @@ from .run_service import RunService
 from .task_state import Task, TaskManager
 from .templates import describe_templates, instantiate_template, template_names
 from .doctor import run_doctor
-from .settings_loader import default_model_config
+from .settings_loader import (
+    anthropic_base_url_from_merged_settings,
+    anthropic_key_from_merged_settings,
+    apply_claude_code_to_config,
+    openai_base_url_from_merged_settings,
+    openai_key_from_merged_settings,
+)
 
 
-def create_app(config: Optional[AppConfig] = None) -> FastAPI:
+class AgentAddRequest(BaseModel):
+    name: str
+    role: str = ""
+    system_prompt: str
+    workspace: Optional[str] = None
+    model: Optional[str] = None
+
+
+class ConfigUpdateRequest(BaseModel):
+    """全字段可选；须作为 JSON 请求体。模块级定义避免嵌套类 + Body() 的 ForwardRef 问题。"""
+
+    project_name: Optional[str] = None
+    workspace_root: Optional[str] = None
+    workflow_mode: Optional[str] = None
+    max_turns: Optional[int] = None
+    use_claude_code_settings: Optional[bool] = None
+    default_model: Optional[str] = None
+
+
+class ModelUpsertRequest(BaseModel):
+    """编辑/新增单个 model；空字符串视为清空（回退到合并 settings/env）。"""
+
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+
+
+def _model_with_resolution(cfg: AppConfig, key: str, m: ModelConfig) -> dict:
+    """返回 model dict，附 resolved_* 字段以便 UI 显示「已合并出的有效值与来源」。
+
+    出于安全考虑，不返回 api_key 原文，只返回是否存在与来源（config / claude_settings / env / none）。
+    """
+    merge = cfg.use_claude_code_settings
+    explicit_key = bool((m.api_key or "").strip())
+    explicit_base = bool((m.base_url or "").strip())
+
+    resolved_key = m.resolved_api_key(merge) or ""
+    resolved_base = m.resolved_base_url(merge) or ""
+
+    def _key_source() -> str:
+        if explicit_key:
+            return "config"
+        if not resolved_key:
+            return "none"
+        if merge:
+            if m.provider == "anthropic" and (anthropic_key_from_merged_settings() or "") == resolved_key:
+                return "claude_settings"
+            if m.provider in ("openai", "openai_compatible", "litellm") and (
+                openai_key_from_merged_settings() or ""
+            ) == resolved_key:
+                return "claude_settings"
+        return "env"
+
+    def _base_source() -> str:
+        if explicit_base:
+            return "config"
+        if not resolved_base:
+            return "none"
+        if merge:
+            if m.provider == "anthropic" and (anthropic_base_url_from_merged_settings() or "") == resolved_base:
+                return "claude_settings"
+            if m.provider in ("openai", "openai_compatible", "litellm") and (
+                openai_base_url_from_merged_settings() or ""
+            ) == resolved_base:
+                return "claude_settings"
+        return "env"
+
+    base = m.model_dump(exclude_none=True)
+    base.update(
+        {
+            "resolved_api_key_present": bool(resolved_key),
+            "resolved_api_key_source": _key_source(),
+            "resolved_base_url": resolved_base or None,
+            "resolved_base_url_source": _base_source(),
+        }
+    )
+    return base
+
+
+def _config_response(cfg: AppConfig) -> dict:
+    """统一构造 GET / PUT 配置返回，让 models 携带 resolved_* 元信息。"""
+    data = cfg.model_dump(exclude_none=True)
+    data["models"] = {k: _model_with_resolution(cfg, k, m) for k, m in cfg.models.items()}
+    return data
+
+
+def create_app(config: Optional[AppConfig] = None, *, config_path: Optional[Path] = None) -> FastAPI:
     app = FastAPI(title="m-agent", version="0.2.0")
     app.add_middleware(
         CORSMiddleware,
@@ -33,38 +129,35 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
     if config is None:
         from .main import _build_default_config
         config = _build_default_config("dev_team_oob")
+    apply_claude_code_to_config(config)
     app.state.config = config
-    app.state.task_manager = TaskManager(Path(config.workspace_root) / ".tasks.json")
+    app.state.config_path = config_path
+    # 与 RunArtifacts / ensure_workspace 使用同一套解析路径，避免相对路径 + 不同 cwd 时 runs 与 .tasks 错位
+    _ws = config.ensure_workspace()
+    app.state.task_manager = TaskManager(_ws / ".tasks.json")
     app.state.task_manager.load()
+    app.state.task_manager.reconcile_stale_active_on_load()
     app.state.active_runs: dict[str, asyncio.Task] = {}
+    app.state.active_run_services: dict[str, RunService] = {}
     app.state.run_cancellations: dict[str, asyncio.Event] = {}
+    app.state.ws_tasks: dict[int, set[str]] = {}
     app.state.connected_clients: list[WebSocket] = []
-
-    # -- Request models --
-    class TaskRequest(BaseModel):
-        prompt: str
-
-    class AgentAddRequest(BaseModel):
-        name: str
-        role: str = ""
-        system_prompt: str
-        workspace: Optional[str] = None
-        model: Optional[str] = None
-
-    class ConfigUpdateRequest(BaseModel):
-        project_name: Optional[str] = None
-        workspace_root: Optional[str] = None
-        workflow_mode: Optional[str] = None
-        max_turns: Optional[int] = None
 
     # -- REST Endpoints --
 
     @app.get("/api/config")
     async def get_config():
-        return app.state.config.model_dump(exclude_none=True)
+        return _config_response(app.state.config)
 
     @app.put("/api/config")
-    async def update_config(req: ConfigUpdateRequest):
+    async def update_config(req: ConfigUpdateRequest = Body(...)):
+        path = getattr(app.state, "config_path", None)
+        has_file = path is not None and Path(path).is_file()
+        if req.use_claude_code_settings is not None and has_file:
+            cfg = AppConfig.from_yaml(path)
+            cfg.use_claude_code_settings = req.use_claude_code_settings
+            apply_claude_code_to_config(cfg)
+            app.state.config = cfg
         cfg = app.state.config
         if req.project_name:
             cfg.project_name = req.project_name
@@ -72,10 +165,56 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
             cfg.workspace_root = req.workspace_root
         if req.workflow_mode:
             cfg.workflow.mode = req.workflow_mode
-        if req.max_turns:
+        if req.max_turns is not None:
             cfg.workflow.max_turns = req.max_turns
+        if req.use_claude_code_settings is not None and not has_file:
+            cfg.use_claude_code_settings = req.use_claude_code_settings
+            apply_claude_code_to_config(cfg)
+        if req.default_model:
+            if req.default_model not in cfg.models:
+                raise HTTPException(400, f"default_model `{req.default_model}` 不在 models 中")
+            cfg.default_model = req.default_model
         cfg.ensure_workspace()
-        return cfg.model_dump(exclude_none=True)
+        return _config_response(cfg)
+
+    @app.put("/api/models/{key}")
+    async def upsert_model(key: str, req: ModelUpsertRequest = Body(...)):
+        """编辑或新增 models[key]。空字符串字段表示清空，让 resolved_* 回退到合并 settings/env。"""
+        cfg: AppConfig = app.state.config
+        existing = cfg.models.get(key)
+        if existing is not None:
+            data = existing.model_dump()
+        else:
+            data = ModelConfig().model_dump()
+
+        provided = req.model_dump(exclude_unset=True)
+        for field in ("api_key", "base_url"):
+            if field in provided:
+                v = provided[field]
+                data[field] = (v or "").strip() or None
+        for field in ("provider", "model"):
+            if field in provided and provided[field] is not None:
+                v = str(provided[field]).strip()
+                if v:
+                    data[field] = v
+        for field in ("temperature", "max_tokens"):
+            if field in provided:
+                data[field] = provided[field]
+        try:
+            cfg.models[key] = ModelConfig(**data)
+        except Exception as e:
+            raise HTTPException(422, f"Invalid model fields: {e}")
+        return _config_response(cfg)
+
+    @app.delete("/api/models/{key}")
+    async def delete_model(key: str):
+        cfg: AppConfig = app.state.config
+        if key not in cfg.models:
+            raise HTTPException(404, f"Unknown model: {key}")
+        if key == cfg.default_model:
+            raise HTTPException(400, "Cannot delete default model")
+        cfg.models.pop(key, None)
+        return _config_response(cfg)
 
     @app.get("/api/templates")
     async def list_templates():
@@ -150,11 +289,32 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
             raise HTTPException(404)
         return t.to_dict()
 
-    @app.post("/api/tasks/{task_id}/cancel")
-    async def cancel_task(task_id: str):
+    async def _cancel_task(task_id: str) -> bool:
+        cancelled = False
         cancel_event = app.state.run_cancellations.get(task_id)
         if cancel_event:
             cancel_event.set()
+            cancelled = True
+        svc = app.state.active_run_services.get(task_id)
+        if svc:
+            svc.cancel()
+            cancelled = True
+        return cancelled
+
+    @app.delete("/api/tasks/{task_id}")
+    async def delete_task(task_id: str):
+        t = app.state.task_manager.get(task_id)
+        if not t:
+            raise HTTPException(404)
+        if t.is_active:
+            raise HTTPException(400, "Cannot delete active task, cancel it first")
+        app.state.task_manager.remove(task_id)
+        app.state.task_manager.save()
+        return {"deleted": task_id}
+
+    @app.post("/api/tasks/{task_id}/cancel")
+    async def cancel_task(task_id: str):
+        await _cancel_task(task_id)
         return {"cancelled": task_id}
 
     @app.get("/api/doctor")
@@ -164,7 +324,7 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
 
     @app.get("/api/runs")
     async def list_runs():
-        root = Path(app.state.config.workspace_root) / "runs"
+        root = app.state.config.ensure_workspace() / "runs"
         if not root.exists():
             return []
         runs = []
@@ -179,7 +339,7 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
 
     @app.get("/api/runs/{run_id}/events")
     async def run_events(run_id: str):
-        root = Path(app.state.config.workspace_root) / "runs" / run_id
+        root = app.state.config.ensure_workspace() / "runs" / run_id
         events_path = root / "events.jsonl"
         if not events_path.exists():
             return []
@@ -191,16 +351,43 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
                 pass
         return events
 
+    @app.get("/api/runs/{run_id}/detail")
+    async def run_detail(run_id: str):
+        root = app.state.config.ensure_workspace() / "runs" / run_id
+        if not root.is_dir():
+            raise HTTPException(404)
+        run_json = root / "run.json"
+        data = json.loads(run_json.read_text(encoding="utf-8")) if run_json.exists() else {}
+        task_md = root / "task.md"
+        summary_md = root / "summary.md"
+        data["task_content"] = task_md.read_text(encoding="utf-8") if task_md.exists() else None
+        data["summary_content"] = summary_md.read_text(encoding="utf-8") if summary_md.exists() else None
+        return data
+
+    @app.delete("/api/runs/{run_id}")
+    async def delete_run(run_id: str):
+        root = app.state.config.ensure_workspace() / "runs" / run_id
+        if not root.is_dir():
+            raise HTTPException(404)
+        shutil.rmtree(root)
+        return {"deleted": run_id}
+
     # -- WebSocket Endpoint --
 
     @app.websocket("/ws")
     async def websocket_endpoint(ws: WebSocket):
         await ws.accept()
         app.state.connected_clients.append(ws)
+        ws_key = id(ws)
+        app.state.ws_tasks.setdefault(ws_key, set())
         try:
             while True:
-                data = await ws.receive_text()
-                msg = json.loads(data)
+                try:
+                    data = await ws.receive_text()
+                    msg = json.loads(data)
+                except json.JSONDecodeError:
+                    await ws.send_json({"type": "error", "content": "Invalid JSON"})
+                    continue
                 msg_type = msg.get("type")
 
                 if msg_type == "start_task":
@@ -218,14 +405,19 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
                     task_obj = Task(id=task_id, name=prompt[:50], prompt=prompt)
                     app.state.task_manager.add(task_obj)
                     task_obj.start()
+                    app.state.task_manager.save()
+                    app.state.ws_tasks[ws_key].add(task_id)
 
-                    await _run_and_stream(ws, prompt, task_id, task_obj, cancel_event, app)
+                    run_task = asyncio.create_task(
+                        _run_and_stream(ws, prompt, task_id, task_obj, cancel_event, app),
+                        name=f"run:{task_id}",
+                    )
+                    app.state.active_runs[task_id] = run_task
 
                 elif msg_type == "cancel_task":
                     task_id = msg.get("task_id")
-                    cancel_event = app.state.run_cancellations.get(task_id)
-                    if cancel_event:
-                        cancel_event.set()
+                    if task_id:
+                        await _cancel_task(task_id)
 
                 elif msg_type == "update_config":
                     updates = msg.get("updates", {})
@@ -238,7 +430,7 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
                         try:
                             await client.send_json({
                                 "type": "config_updated",
-                                "config": app.state.config.model_dump(exclude_none=True),
+                                "config": _config_response(app.state.config),
                             })
                         except Exception:
                             pass
@@ -246,16 +438,23 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
         except WebSocketDisconnect:
             pass
         finally:
+            for task_id in list(app.state.ws_tasks.get(ws_key, set())):
+                await _cancel_task(task_id)
+            app.state.ws_tasks.pop(ws_key, None)
             if ws in app.state.connected_clients:
                 app.state.connected_clients.remove(ws)
 
     async def _run_and_stream(ws, prompt, task_id, task_obj, cancel_event, app):
         svc = RunService(app.state.config)
+        app.state.active_run_services[task_id] = svc
+        was_cancelled = False
         try:
             async for event in svc.run(prompt):
                 if cancel_event.is_set():
+                    svc.cancel()
                     task_obj.cancel()
                     await ws.send_json({"type": "run_cancelled", "task_id": task_id})
+                    was_cancelled = True
                     break
                 payload = {"type": "run_event", "task_id": task_id, "event": event.to_dict()}
                 for client in app.state.connected_clients:
@@ -265,7 +464,19 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
                         pass
                 if event.event_type == "run_started":
                     task_obj.run_dir = event.metadata.get("run_dir")
-            task_obj.finish(success=True)
+            if cancel_event.is_set() and not was_cancelled:
+                task_obj.cancel()
+                try:
+                    await ws.send_json({"type": "run_cancelled", "task_id": task_id})
+                except Exception:
+                    pass
+                was_cancelled = True
+            if not was_cancelled:
+                task_obj.finish(success=True)
+        except asyncio.CancelledError:
+            task_obj.cancel()
+            was_cancelled = True
+            raise
         except Exception as e:
             task_obj.finish(success=False, error=str(e))
             try:
@@ -273,7 +484,14 @@ def create_app(config: Optional[AppConfig] = None) -> FastAPI:
             except Exception:
                 pass
         finally:
+            if not task_obj.is_finished:
+                task_obj.finish(
+                    success=False,
+                    error="运行未正常结束（可能为连接断开或旧版本问题），已标为失败",
+                )
             app.state.task_manager.save()
+            app.state.active_runs.pop(task_id, None)
+            app.state.active_run_services.pop(task_id, None)
             app.state.run_cancellations.pop(task_id, None)
 
     return app

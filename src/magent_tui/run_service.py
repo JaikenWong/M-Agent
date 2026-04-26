@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import AsyncIterator, Optional
+
+log = logging.getLogger(__name__)
 
 from .artifacts import RunArtifacts
 from .config_models import AppConfig
 from .orchestrator import AgentMessage, build_orchestrator
 from .run_events import RunEvent
+
+# 编排流结束哨兵（用 object() 与 AgentMessage 区分）
+_ORCH_END = object()
 
 
 class RunService:
@@ -48,41 +54,74 @@ class RunService:
         artifacts.write_event(initialized)
         yield initialized
 
+        # 编排器单独跑在 pump 里，避免用 asyncio.wait 与 callback 竞态时
+        # cancel 掉 __anext__，导致 async gen 报 GeneratorExit，进而让 OpenTelemetry
+        # 在 “wrong Context” 上 detach 报错（见 trace_invoke_agent_span / run_stream）。
+        orch_q: asyncio.Queue[AgentMessage | object] = asyncio.Queue()
+        pump_error: list[BaseException] = []
+
+        async def _pump_orchestrator() -> None:
+            try:
+                async for msg in orchestrator.run(task):
+                    if self._cancel and self._cancel.is_set():
+                        return
+                    await orch_q.put(msg)
+            except BaseException as exc:  # noqa: BLE001 — 记录后由主循环统一处理
+                pump_error.append(exc)
+            finally:
+                await orch_q.put(_ORCH_END)
+
+        pump_task = asyncio.create_task(_pump_orchestrator(), name="orchestrator_pump")
+        orch_ended = False
+
         try:
-            orch_iter = orchestrator.run(task).__aiter__()
-            orch_done = False
-
             while not self._cancel.is_set():
-                tasks = []
-                if not orch_done:
-                    tasks.append(asyncio.create_task(orch_iter.__anext__(), name="orch"))
-                tasks.append(asyncio.create_task(callback_queue.get(), name="callback"))
-
-                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                if orch_ended and callback_queue.empty():
+                    break
+                if orch_ended:
+                    t_cb = asyncio.create_task(callback_queue.get(), name="callback")
+                    done, pending = await asyncio.wait([t_cb], return_when=asyncio.FIRST_COMPLETED)
+                else:
+                    t_cb = asyncio.create_task(callback_queue.get(), name="callback")
+                    t_orch = asyncio.create_task(orch_q.get(), name="orch_q")
+                    done, pending = await asyncio.wait(
+                        {t_cb, t_orch}, return_when=asyncio.FIRST_COMPLETED
+                    )
                 for p in pending:
                     p.cancel()
-
-                for task_done in done:
                     try:
-                        result = task_done.result()
-                    except StopAsyncIteration:
-                        if task_done.get_name() == "orch":
-                            orch_done = True
-                        continue
-                    except Exception:
-                        continue
+                        await p
+                    except asyncio.CancelledError:
+                        pass
 
+                task_done = next(iter(done))
+                try:
+                    result = task_done.result()
+                except Exception as e:  # noqa: BLE001
+                    log.exception("编排任务失败 (%s): %s", task_done.get_name(), e)
+                    raise
+
+                if task_done.get_name() == "orch_q":
+                    if result is _ORCH_END:
+                        orch_ended = True
+                        if pump_error:
+                            break
+                        continue
+                    assert isinstance(result, AgentMessage)
                     msg = result
-                    artifacts.write_message(msg)
-                    event = RunEvent.from_message(run_id, msg)
-                    artifacts.write_event(event)
-                    yield event
+                else:
+                    assert isinstance(result, AgentMessage)
+                    msg = result
 
-                if orch_done and callback_queue.empty():
-                    break
+                artifacts.write_message(msg)
+                event = RunEvent.from_message(run_id, msg)
+                artifacts.write_event(event)
+                yield event
 
-            # Drain remaining callback messages
-            while not callback_queue.empty():
+            if pump_error:
+                raise pump_error[0]
+
+            while not callback_queue.empty() and not self._cancel.is_set():
                 msg = callback_queue.get_nowait()
                 artifacts.write_message(msg)
                 event = RunEvent.from_message(run_id, msg)
@@ -106,3 +145,10 @@ class RunService:
             artifacts.write_event(failed)
             yield failed
             raise
+        finally:
+            if not pump_task.done():
+                pump_task.cancel()
+                try:
+                    await pump_task
+                except asyncio.CancelledError:
+                    pass

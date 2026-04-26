@@ -1,5 +1,8 @@
 export type Provider = "anthropic" | "openai" | "openai_compatible" | "litellm";
 
+/** 后端不会回传 api_key 原文，只返回 source / present；UI 据此显示「已合并自 Claude / 本配置 / 环境变量 / 未设」 */
+export type CredentialSource = "config" | "claude_settings" | "env" | "none";
+
 export interface ModelConfig {
   provider: Provider;
   model: string;
@@ -8,6 +11,11 @@ export interface ModelConfig {
   temperature: number;
   max_tokens?: number | null;
   extra: Record<string, unknown>;
+  /** 是否已解析到可用 api_key（包含来自 Claude settings 与 env 的） */
+  resolved_api_key_present?: boolean;
+  resolved_api_key_source?: CredentialSource;
+  resolved_base_url?: string | null;
+  resolved_base_url_source?: CredentialSource;
 }
 
 export interface AgentConfig {
@@ -28,11 +36,18 @@ export interface WorkflowConfig {
   termination_keywords: string[];
   selector_prompt?: string | null;
   required_artifacts: Record<string, string[]>;
+  /** 对用户的总接口，须与某 Agent 的 name 一致（如 PM）；约定谁面向用户汇报，不改编排 */
+  liaison_agent?: string | null;
 }
 
 export interface AppConfig {
   project_name: string;
   workspace_root: string;
+  /**
+   * true：合并 ~/.claude 等与 Claude Code 一致的 settings 到 models
+   * false：仅用 YAML + 环境变量
+   */
+  use_claude_code_settings?: boolean;
   default_model: string;
   models: Record<string, ModelConfig>;
   agents: AgentConfig[];
@@ -127,6 +142,15 @@ export interface RunSummary {
   workflow: string;
   started_at: string;
   run_dir: string;
+}
+
+export interface RunDetail {
+  run_id: string;
+  project: string;
+  workflow: string;
+  started_at: string;
+  task_content: string | null;
+  summary_content: string | null;
 }
 
 // Agent color palette matching TUI convention

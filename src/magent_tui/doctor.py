@@ -8,7 +8,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config_models import AppConfig
-from .settings_loader import default_model_config, find_claude_settings, load_claude_settings
+from .settings_loader import (
+    apply_claude_code_to_config,
+    claude_config_dir,
+    default_model_config,
+    find_claude_settings,
+    model_from_claude_settings,
+    merged_claude_code_settings,
+)
 
 
 @dataclass
@@ -33,27 +40,33 @@ def _config_check(path: Path | None) -> tuple[DoctorCheck, AppConfig | None]:
         return DoctorCheck("config", False, f"配置文件不存在: {path}"), None
     try:
         cfg = AppConfig.from_yaml(path)
-        return DoctorCheck("config", True, f"{path} | agents={len(cfg.agents)} | workflow={cfg.workflow.mode}"), cfg
+        cc = "on" if cfg.use_claude_code_settings else "off"
+        return DoctorCheck(
+            "config",
+            True,
+            f"{path} | agents={len(cfg.agents)} | workflow={cfg.workflow.mode} | claude_settings_merge={cc}",
+        ), cfg
     except Exception as exc:
         return DoctorCheck("config", False, f"{path} | {exc}"), None
 
 
 def _claude_settings_check() -> DoctorCheck:
-    path = find_claude_settings()
-    if not path:
-        return DoctorCheck("claude_settings", False, "未找到 ~/.claude/settings.json")
-    data = load_claude_settings()
-    if not data:
-        return DoctorCheck("claude_settings", False, f"{path} | 文件为空或解析失败")
+    data = merged_claude_code_settings()
+    m = model_from_claude_settings()
     env = data.get("env") or {}
-    model = env.get("ANTHROPIC_MODEL") or data.get("model") or "(unknown)"
-    has_key = bool(
-        env.get("ANTHROPIC_API_KEY")
-        or env.get("ANTHROPIC_AUTH_TOKEN")
-        or data.get("api_key")
-        or data.get("auth_token")
-    )
-    return DoctorCheck("claude_settings", has_key, f"{path} | model={model} | api_key={'yes' if has_key else 'no'}")
+    raw = env.get("ANTHROPIC_MODEL") or data.get("model")
+    res = f"{m.model} ({m.provider})" if m else "(与 Claude 合并后无 api/base_url, 可依赖进程 env)"
+    first = find_claude_settings()
+    has_file = first is not None
+    has_key = bool(m) or bool(os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN"))
+    d = f"config_dir={claude_config_dir()}"
+    if first:
+        d += f" | 首个匹配文件: {first}"
+    if has_file:
+        d += f" | 顶层/ env model={raw!r} | 解析为 {res}"
+    else:
+        d += f" | 未找到分层的 settings.json，解析为 {res}"
+    return DoctorCheck("claude_settings", has_key, d)
 
 
 def _env_check() -> list[DoctorCheck]:
@@ -73,10 +86,15 @@ def _model_checks(cfg: AppConfig | None) -> list[DoctorCheck]:
     if cfg is None:
         return []
     checks: list[DoctorCheck] = []
-    fallback_model = default_model_config()
+    merge = cfg.use_claude_code_settings
+    fallback_model = default_model_config(merge_claude_code_settings=merge)
     for key, model in cfg.models.items():
-        has_auth = bool(model.resolved_api_key() or model.base_url)
-        can_fallback = not has_auth and bool(fallback_model.resolved_api_key() or fallback_model.base_url)
+        has_auth = bool(
+            model.resolved_api_key(merge) or model.resolved_base_url(merge)
+        )
+        can_fallback = not has_auth and bool(
+            fallback_model.resolved_api_key(merge) or fallback_model.resolved_base_url(merge)
+        )
         detail = f"{model.provider}:{model.model} | api/base={'yes' if has_auth else 'no'}"
         if can_fallback:
             detail += f" | runtime_fallback={fallback_model.provider}:{fallback_model.model}"
@@ -97,6 +115,8 @@ def _model_checks(cfg: AppConfig | None) -> list[DoctorCheck]:
 def run_doctor(config_path: str | None = None) -> list[DoctorCheck]:
     path = Path(config_path) if config_path else None
     config_check, cfg = _config_check(path)
+    if cfg is not None:
+        apply_claude_code_to_config(cfg)
     checks = [
         _module_check("textual"),
         _module_check("pydantic"),

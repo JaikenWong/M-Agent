@@ -6,6 +6,7 @@ interface TaskState {
   tasks: Task[];
   loading: boolean;
   fetchTasks: () => Promise<void>;
+  deleteTask: (id: string) => Promise<void>;
 }
 
 export const useTaskStore = create<TaskState>((set) => ({
@@ -20,5 +21,10 @@ export const useTaskStore = create<TaskState>((set) => ({
     } finally {
       set({ loading: false });
     }
+  },
+
+  deleteTask: async (id) => {
+    await api.deleteTask(id);
+    set((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) }));
   },
 }));

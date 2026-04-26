@@ -48,7 +48,7 @@ python -m unittest tests.test_pipeline_gate.PipelineGateTest.test_missing_artifa
 ```
 AppConfig (config_models.py)
   ├── models: Dict[str, ModelConfig]  (provider, model, api_key, base_url)
-  ├── agents: List[AgentConfig]       (name, role, system_prompt, workspace)
+  ├── agents: List[AgentConfig]       (name, role, system_prompt, workspace, tools)
   └── workflow: WorkflowConfig        (mode, max_turns, required_artifacts)
 
 RunService (run_service.py)           — async iterator yielding RunEvent
@@ -68,6 +68,16 @@ MAgentTabApp (tab_app.py)        — 5-tab TUI
 
 TaskManager (task_state.py)      — in-memory task queue with JSON persistence
   └── States: todo → pending → running ↔ input_required → done | failed | cancelled
+
+FastAPI Server (server.py)       — REST + WebSocket for web/desktop frontends
+  └── Endpoints: /api/config, /api/models, /api/agents, /api/templates,
+      /api/workspace, /api/tasks, /api/doctor, /api/runs
+  └── WebSocket /ws: start_task, cancel_task, update_config → run_event broadcast
+
+Frontend (frontend/)             — React 18 + TypeScript + Vite + Tailwind CSS
+  └── Tauri 2 desktop app (frontend/src-tauri/)
+  └── State: Zustand stores (configStore, runStore, runListStore)
+  └── WebSocket client: frontend/src/ws/
 ```
 
 ### Data Flow
@@ -107,6 +117,29 @@ workspace_root/runs/YYYYMMDD-HHMMSS/
   transcript.jsonl  — message stream (ArtifactRecord per line)
 ```
 
+## Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev           # Vite dev server
+npm run tauri:dev     # Tauri desktop dev
+npm run tauri:build   # Tauri production build
+```
+
+Frontend connects to FastAPI backend via REST (`/api/*`) and WebSocket (`/ws`).
+Tauri Rust side (`src-tauri/`) manages server lifecycle — starts/stops FastAPI process.
+
+## Server Mode
+
+```bash
+magent-tui serve                          # localhost:8765
+magent-tui serve --host 0.0.0.0 --port 8765 --config configs/default.yaml
+```
+
+WebSocket message types (client → server): `start_task`, `cancel_task`, `update_config`
+WebSocket broadcast types (server → client): `run_event`, `run_cancelled`, `run_failed`, `config_updated`
+
 ## Key Conventions
 
 - **Source layout**: all code under `src/magent_tui/`
@@ -114,6 +147,8 @@ workspace_root/runs/YYYYMMDD-HHMMSS/
 - **Workspace convention**: each agent gets a subdirectory under `workspace_root` (default: `deliverables/`)
 - **Model providers**: `anthropic` (via `autogen-ext[anthropic]`), `openai` / `openai_compatible` (via `autogen-ext[openai]`)
 - **Orchestrator factory**: `build_orchestrator(config)` in orchestrator.py — always use this, never construct directly
+- **Agent tools**: `workspace_tools.py` provides `write_text_file`, `append_text_file`, `read_text_file`, `list_workspace_files`; `claude_agent.py` adds Claude Agent SDK integration (Read/Write/Edit/Bash/Grep/Glob) — enable per-agent via `tools: ["claude_agent"]` in config
+- **Templates**: `templates.py` — built-in templates (dev_team_oob, product_sprint, content_factory, dev_delivery, research_squad, code_review, debate); apply via CLI `init --template` or API `POST /api/templates/{name}/apply`
 
 ## Not Yet Implemented
 

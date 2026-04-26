@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from magent_tui.config_models import AgentConfig, AppConfig, ModelConfig, WorkflowConfig
 from magent_tui.run_service import RunService
@@ -16,6 +18,7 @@ class PipelineGateTest(unittest.IsolatedAsyncioTestCase):
             cfg = AppConfig(
                 project_name="pipeline-test",
                 workspace_root=str(root),
+                use_claude_code_settings=False,
                 default_model="default",
                 models={"default": ModelConfig(provider="anthropic", model="claude-sonnet-4-5")},
                 agents=[
@@ -28,12 +31,14 @@ class PipelineGateTest(unittest.IsolatedAsyncioTestCase):
                     required_artifacts={"PM": ["PRD.md"]},
                 ),
             )
-            service = RunService(cfg)
-            messages = []
-            async for event in service.run("请按 pipeline 协作"):
-                if event.event_type == "agent_message":
-                    messages.append(event.content or "")
-                await asyncio.sleep(0)
+            no_keys = {k: "" for k in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY")}
+            with mock.patch.dict(os.environ, no_keys, clear=False):
+                service = RunService(cfg)
+                messages = []
+                async for event in service.run("请按 pipeline 协作"):
+                    if event.event_type == "agent_message":
+                        messages.append(event.content or "")
+                    await asyncio.sleep(0)
 
-            self.assertTrue(any("pipeline 门禁失败" in msg for msg in messages))
+                self.assertTrue(any("pipeline 门禁失败" in msg for msg in messages))
 

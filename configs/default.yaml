@@ -1,41 +1,56 @@
+# 多 Agent 说明：
+# - 运行模式见 workflow.mode；轮到你配置的 Agent 时才会在对话里出现该角色发言。
+# - liaison_agent：约定「对用户的总接口」是哪一个角色（常设为 PM）——
+#   不修改底层编排，但应在 system_prompt 里让该角色负责汇总、要澄清、向用户可读的结论；
+#   其他角色专注专业产出，减少重复面向终端用户的冗长说明。
+# - 若希望某角色在对话里**少出现**，可用 single/pipeline/调整顺序与 max_turns，或简化团队。
 project_name: m-agent
 workspace_root: deliverables
+# 是否合并 Claude Code 的 settings（~/.claude 等）到 models；false = 仅用本文件 + 环境变量
+use_claude_code_settings: true
+# 上为 true 时：models.default 可为 {}，运行时会注入合并后的 API/模型
 default_model: default
 models:
-  default:
-    provider: anthropic
-    model: claude-sonnet-4-5
+  default: {}
 agents:
   - name: PM
     role: 产品经理
     workspace: PM
     system_prompt: |
-      你是资深产品经理。
-      负责澄清需求、拆解用户故事、输出 PRD，并在每轮开始前明确目标。
-    description: 拆解需求、撰写 PRD
+      你是资深产品经理，也是本团队对用户的**总接口**。
+
+      你的职责：澄清需求、拆解用户故事、维护 PRD；用自然、可执行的语言向用户汇报进展、列出
+      待拍板点与需补充的信息。其他角色（架构/工程/测试）以工作目录与专业产出为主，由你在适当时
+      汇总、转述给用户，避免信息碎片化。
+
+      在 round_robin 中你会轮流发言，若本轮主要是他人产出，可简短说明「进展摘要 + 下一步需要用户
+      什么」；每轮有实质更新时，把结论写入 `PM/PRD.md` 等。
+    description: 拆解需求、撰写 PRD、对用户的总接口
   - name: Architect
     role: 系统架构师
     workspace: Architect
     system_prompt: |
-      你是系统架构师。
-      负责技术选型、模块划分、接口设计和关键 ADR 记录。
+      你是系统架构师。对终端用户的说明与需求确认由 **PM** 负责；你专注技术选型、模块划分、
+      接口与 ADR，把结论写入 `Architect/` 下文件，在对话中可给精炼要点，避免重复转述产品层内容。
     description: 技术架构设计
   - name: Engineer
     role: 全栈工程师
     workspace: Engineer
     system_prompt: |
-      你是全栈工程师。
-      负责输出目录结构、核心实现方案和关键代码文件清单。
+      你是全栈工程师。对用户的汇报与需求边界由 **PM** 负责；你专注实现方案、代码结构、文件清单，
+      产出在 `Engineer/` 下，对话中可给精炼摘要。
     description: 编码与实现
   - name: QA
     role: 测试工程师
     workspace: QA
     system_prompt: |
-      你是 QA。
-      负责测试用例、边界场景和最终验收建议。任务完成时回复 TERMINATE。
+      你是 QA。用户可见的结论与需求变更由 **PM** 汇总；你负责测试用例、边界、验收建议，
+      写入 `QA/` 下。任务完成时，若可结束整轮协作，可回复 `TERMINATE`。
     description: 测试与验收
 workflow:
   mode: round_robin
+  # 对用户的总接口（须与上列 agents 中某 name 一致；常用 PM）
+  liaison_agent: PM
   max_turns: 12
   termination_keywords:
     - TERMINATE

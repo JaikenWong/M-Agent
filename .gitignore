@@ -1,29 +1,93 @@
+# --- Python ---
+.venv/
+venv/
+env/
+.env/
+.agents/
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+*.egg
 *.egg-info/
+.eggs/
 dist/
 build/
-.eggs/
-.venv/
-venv/
-.env
-*.egg
+pip-log.txt
+pip-wheel-metadata/
+.pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.pytest_cache/
-.claude/
-*.sw[po]
-*~
-deliverables/
-deliverables-smoke*/
-.archive/
-configs/*.generated.yaml
+.tox/
+.nox/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+.hypothesis/
 
-# IDE / AI tool artifacts
-.agents/
+# --- Node / frontend ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-store/
+*.tsbuildinfo
+frontend/dist/
+.vite/
+*.local
+
+# --- Tauri / Rust ---
+frontend/src-tauri/target/
+frontend/src-tauri/binaries/
+frontend/src-tauri/gen/
+frontend/src-tauri/icons/
+frontend/src-tauri/Cargo.lock
+**/*.rs.bk
+
+# --- 密钥与本地环境（勿提交） ---
+.env
+.env.*
+!.env.example
+configs/*.secret.yaml
+
+# --- OS / 编辑器 ---
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*~
+*.swp
+*.swo
+.idea/
+*.iml
+.project
+.classpath
+.settings/
 .kiro/
 .qoder/
 .trae/
+.archive/
+
+# --- 本机运行数据（工作区/任务/运行目录）---
+deliverables/
+deliverables-smoke-send/
+frontend/deliverables/
+**/.tasks.json
+
+# --- 打包与临时文件 ---
+packaging/
+*.dmg
+*.app
+.pyinstaller/
+*.log
+
+# --- 其它 ---
+.cache/
+tmp/
+temp/
 skills/
 skills-lock.json

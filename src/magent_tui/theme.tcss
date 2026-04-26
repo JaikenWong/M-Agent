@@ -73,12 +73,13 @@ ChatLog {
 ChatLog .msg {
     margin-bottom: 1;
     padding: 1 2;
-    border-left: heavy $border-primary;
+    border-left: solid $border-primary;
     background: $bg-panel;
 }
 
 ChatLog .msg-system {
-    border-left: heavy $text-muted;
+    /* border 侧避免用 $text-muted 变量，部分 Textual 版本解析会失败 */
+    border-left: solid #565f89;
     background: $bg-boost;
     color: $text-secondary;
     padding: 0 2;
@@ -136,7 +137,7 @@ AgentPanel {
     padding: 1;
     margin: 0 0 1 0;
     background: $bg-panel;
-    border-left: heavy $agent-engineer;
+    border-left: solid $agent-engineer;
 }
 
 .agent-item:hover {
@@ -289,11 +290,11 @@ TaskLog .task-item {
     background: $bg-panel;
     padding: 1;
     margin-bottom: 1;
-    border-left: heavy $border-primary;
+    border-left: solid $border-primary;
 }
 
 TaskLog .task-item.has-session {
-    border-left: heavy $border-accent;
+    border-left: solid $border-accent;
 }
 
 #edit-buttons, #settings-buttons {
@@ -351,7 +352,7 @@ ListView:focus {
 ListItem {
     background: $bg-panel;
     margin: 0 0 1 0;
-    border-left: heavy $border-primary;
+    border-left: solid $border-primary;
 }
 
 ListItem:hover {
@@ -360,7 +361,7 @@ ListItem:hover {
 
 ListItem.-selected {
     background: $bg-boost;
-    border-left: heavy $border-accent;
+    border-left: solid $border-accent;
 }
 
 Label {
@@ -434,9 +435,9 @@ TaskLog .task-item {
     background: $bg-panel;
     padding: 1;
     margin-bottom: 1;
-    border-left: heavy $border-primary;
+    border-left: solid $border-primary;
 }
 
 TaskLog .task-item.has-session {
-    border-left: heavy $border-accent;
+    border-left: solid $border-accent;
 }

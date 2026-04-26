@@ -10,10 +10,13 @@ pub struct AppState {
 
 #[tauri::command]
 fn get_server_status(state: tauri::State<AppState>) -> serde_json::Value {
-    let server = state.server.lock().unwrap();
+    let mut server = state.server.lock().unwrap();
+    let running = server.is_running();
+    let err = server.last_error().map(|s| s.to_string());
     serde_json::json!({
-        "running": server.is_running(),
+        "running": running,
         "port": server.port(),
+        "last_error": err,
     })
 }
 
@@ -39,11 +42,12 @@ pub fn run() {
         .manage(AppState {
             server: Mutex::new(server),
         })
-        .setup(|app| {
-            let state = app.state::<AppState>();
+        .setup(|_app| {
+            let state = _app.state::<AppState>();
             let mut server = state.server.lock().unwrap();
-            // Auto-start server on launch; ignore error (server may already be running)
-            let _ = server.start();
+            if let Err(e) = server.start() {
+                eprintln!("[m-agent] 后端未启动: {e}");
+            }
             Ok(())
         })
         .on_window_event(|window, event| {

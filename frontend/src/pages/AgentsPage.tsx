@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useConfigStore } from "@/store/configStore";
 import { api } from "@/api/endpoints";
-import type { AgentConfig, Template } from "@/types";
+import type { Template } from "@/types";
 import { Plus, Trash2, Download } from "lucide-react";
 
 export function AgentsPage() {

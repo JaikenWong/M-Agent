@@ -11,7 +11,7 @@ from typing import Optional
 
 from .config_models import AgentConfig, AppConfig, ModelConfig, WorkflowConfig
 from .doctor import format_doctor_report, run_doctor
-from .settings_loader import default_model_config, find_claude_settings
+from .settings_loader import apply_claude_code_to_config, default_model_config, find_claude_settings
 from .templates import describe_templates, instantiate_template, template_names
 
 
@@ -83,9 +83,7 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def _fix_model_fallback(cfg: AppConfig) -> None:
-    for key, m in list(cfg.models.items()):
-        if not m.resolved_api_key() and not m.base_url:
-            cfg.models[key] = default_model_config()
+    apply_claude_code_to_config(cfg)
 
 
 async def _headless_run(cfg: AppConfig, task: str) -> int:
@@ -152,7 +150,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     import uvicorn
     from .server import create_app
-    app = create_app(cfg)
+    app = create_app(cfg, config_path=path)
     uvicorn.run(app, host=args.host, port=args.port)
     return 0
 

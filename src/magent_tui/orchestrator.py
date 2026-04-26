@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import AsyncIterator, Callable, Optional
 
@@ -100,9 +101,59 @@ class MockOrchestrator(OrchestratorBase):
 
 # --------------------------- AutoGen ---------------------------
 
-def _build_model_client(model_cfg: ModelConfig):
+
+def _openai_base_is_default_or_official(base_url: Optional[str]) -> bool:
+    """未设 base_url 时 OpenAI 客户端默认连官方；与 claude-* 模型名组合会 404。"""
+    b = (base_url or "").strip().lower()
+    if not b:
+        return True
+    return "api.openai.com" in b
+
+
+def _effective_model_config_for_client(
+    model_cfg: ModelConfig, merge_claude_code_settings: bool = True
+) -> ModelConfig:
+    """把误配成 openai* 的 Anthropic 模型名拉回 Anthropic 协议，避免对 OpenAI 端点发 claude-* 导致 404。
+
+    常见来源：`default_model_config()` 在仅有 OPENAI_API_KEY 时设成 openai，但 YAML/合并里 `model` 仍是 claude-*；
+    或历史上写错 provider。带 localhost 的 base_url 视为自建聚合，不自动改，以免破坏 LiteLLM 等 OpenAI 面。
+    """
+    m = (model_cfg.model or "").strip().lower()
+    if not m.startswith("claude-"):
+        return model_cfg
+    if model_cfg.provider not in ("openai", "openai_compatible"):
+        return model_cfg
+    bu = (model_cfg.resolved_base_url(merge_claude_code_settings) or "").strip().lower()
+    if bu and any(x in bu for x in ("localhost", "127.0.0.1", "0.0.0.0", "host.docker.internal")):
+        return model_cfg
+    k_from_cfg = (model_cfg.api_key or "").strip()
+    if k_from_cfg.startswith("sk-ant"):
+        return model_cfg.model_copy(update={"provider": "anthropic", "api_key": k_from_cfg})
+    if merge_claude_code_settings:
+        from .settings_loader import anthropic_key_from_merged_settings
+
+        auth = (
+            anthropic_key_from_merged_settings()
+            or os.getenv("ANTHROPIC_API_KEY")
+            or os.getenv("ANTHROPIC_AUTH_TOKEN")
+            or ""
+        ).strip()
+    else:
+        auth = (os.getenv("ANTHROPIC_API_KEY") or os.getenv("ANTHROPIC_AUTH_TOKEN") or "").strip()
+    if auth:
+        return model_cfg.model_copy(update={"provider": "anthropic", "api_key": auth})
+    return model_cfg
+
+
+def _build_model_client(
+    model_cfg: ModelConfig, merge_claude_code_settings: bool = True
+):
     """根据 ModelConfig 构造 autogen model client。延迟导入。"""
     from autogen_ext.models.openai import OpenAIChatCompletionClient  # type: ignore
+
+    model_cfg = _effective_model_config_for_client(
+        model_cfg, merge_claude_code_settings=merge_claude_code_settings
+    )
 
     def _fallback_model_info(provider: str, model: str) -> dict:
         base = {
@@ -123,10 +174,12 @@ def _build_model_client(model_cfg: ModelConfig):
             from autogen_ext.models.anthropic import AnthropicChatCompletionClient  # type: ignore
 
             kwargs = dict(model=model_cfg.model)
-            if model_cfg.api_key:
-                kwargs["api_key"] = model_cfg.api_key
-            if model_cfg.base_url:
-                kwargs["base_url"] = model_cfg.base_url
+            resolved_key = model_cfg.resolved_api_key(merge_claude_code_settings)
+            resolved_base = model_cfg.resolved_base_url(merge_claude_code_settings)
+            if resolved_key:
+                kwargs["api_key"] = resolved_key
+            if resolved_base:
+                kwargs["base_url"] = resolved_base
             if model_cfg.temperature is not None:
                 kwargs["temperature"] = model_cfg.temperature
             if model_cfg.max_tokens is not None:
@@ -136,11 +189,25 @@ def _build_model_client(model_cfg: ModelConfig):
         except Exception as exc:
             raise RuntimeError(f"Anthropic client 初始化失败: {exc}") from exc
 
+    mod = (model_cfg.model or "").strip().lower()
+    eff_base_oai = model_cfg.resolved_base_url(merge_claude_code_settings)
+    if mod.startswith("claude-") and _openai_base_is_default_or_official(eff_base_oai):
+        raise RuntimeError(
+            "模型 id 为 claude-*，但当前仍走 OpenAI 官方地址（base_url 为空或含 api.openai.com），"
+            "会对错误端点发请求并出现 404。\n"
+            "请任选：1) 设置 ANTHROPIC_API_KEY（或 merged Claude settings），并保持 use_claude_code_settings: true；"
+            "2) 在 YAML 为 default 显式写 provider: anthropic；"
+            "3) 若用讯飞等 OpenAI 兼容网关，请写 provider: openai_compatible、控制台的 base_url 与 modelId，"
+            "并设 use_claude_code_settings: false，勿混用 claude 模型名与官方 OpenAI。"
+        )
+
     kwargs: dict = dict(model=model_cfg.model)
-    if model_cfg.api_key:
-        kwargs["api_key"] = model_cfg.api_key
-    if model_cfg.base_url:
-        kwargs["base_url"] = model_cfg.base_url
+    resolved_key = model_cfg.resolved_api_key(merge_claude_code_settings)
+    resolved_base = model_cfg.resolved_base_url(merge_claude_code_settings)
+    if resolved_key:
+        kwargs["api_key"] = resolved_key
+    if resolved_base:
+        kwargs["base_url"] = resolved_base
     if model_cfg.temperature is not None:
         kwargs["temperature"] = model_cfg.temperature
     if model_cfg.max_tokens is not None:
@@ -220,7 +287,7 @@ class AutoGenOrchestrator(OrchestratorBase):
         agents = []
         for a in self.config.agents:
             mc = self.config.get_model_for_agent(a)
-            client = _build_model_client(mc)
+            client = _build_model_client(mc, self.config.use_claude_code_settings)
             workspace_path = self._workspace_root / a.resolved_workspace()
             system = (
                 f"{a.system_prompt}\n\n"
@@ -262,6 +329,31 @@ class AutoGenOrchestrator(OrchestratorBase):
             )
         return agents
 
+    @staticmethod
+    def _stream_item_to_text(ev: object) -> str | None:
+        """把 AutoGen 流事件转 UI 可读文本；用官方 to_text() 覆盖工具/思考/文本/代码执行等。"""
+        from autogen_agentchat.messages import (  # type: ignore[import-not-found]
+            BaseAgentEvent,
+            BaseChatMessage,
+            UserInputRequestedEvent,
+        )
+        if isinstance(ev, UserInputRequestedEvent):
+            return None
+        ChunkCls = None
+        try:
+            from autogen_agentchat.messages import (  # type: ignore[import-not-found]
+                ModelClientStreamingChunkEvent as ChunkCls,  # noqa: N814
+            )
+        except Exception:
+            ChunkCls = None
+        if ChunkCls is not None and isinstance(ev, ChunkCls):
+            return None
+        if isinstance(ev, (BaseChatMessage, BaseAgentEvent)):
+            t = ev.to_text()
+            s = t.strip() if t else ""
+            return s or None
+        return None
+
     def _build_team(self, agents):
         from autogen_agentchat.teams import RoundRobinGroupChat, SelectorGroupChat  # type: ignore
         from autogen_agentchat.conditions import (  # type: ignore
@@ -275,7 +367,9 @@ class AutoGenOrchestrator(OrchestratorBase):
 
         if self.config.workflow.mode == "selector":
             mc = next(iter(self.config.models.values()), None)
-            client = _build_model_client(mc) if mc else None
+            client = (
+                _build_model_client(mc, self.config.use_claude_code_settings) if mc else None
+            )
             selector_kwargs: dict = dict(
                 participants=agents,
                 model_client=client,
@@ -297,20 +391,30 @@ class AutoGenOrchestrator(OrchestratorBase):
                 yield m
             return
 
+        from autogen_agentchat.base import TaskResult  # type: ignore[import-not-found]
+
         team = self._build_team(agents)
-        stop_reason = None
+        stop_reason: str | None = None
+        any_user_visible = False
         async for event in team.run_stream(task=task):
-            if hasattr(event, "messages") and hasattr(event, "stop_reason"):
-                stop_reason = getattr(event, "stop_reason", None)
+            if isinstance(event, TaskResult):
+                stop_reason = event.stop_reason
                 continue
+            text = self._stream_item_to_text(event)
+            if not text:
+                continue
+            any_user_visible = True
             name = getattr(event, "source", None) or ""
-            content = getattr(event, "content", None)
-            if content is None:
-                continue
-            if not isinstance(content, str):
-                content = str(content)
             role = next((a.role for a in self.config.agents if a.name == name), "agent")
-            yield AgentMessage(agent=name or "system", role=role, content=content)
+            yield AgentMessage(agent=name or "system", role=role, content=text)
+        if not any_user_visible:
+            detail = f" stop_reason={stop_reason!r}" if stop_reason else ""
+            yield AgentMessage(
+                "system",
+                "system",
+                "未产生任何可展示输出（流中无 TextMessage/工具结果等）。"
+                f"请检查 API Key、网络、额度与 workflow.max_turns。{detail}",
+            )
         reason_text = f"（{stop_reason}）" if stop_reason else ""
         yield AgentMessage("system", "system", f"协作结束{reason_text}。", final=True)
 
@@ -330,9 +434,13 @@ class AutoGenOrchestrator(OrchestratorBase):
                 "你处于 pipeline 协作模式，请只完成你当前阶段，将产出写入你的工作目录。"
                 f"{predecessor_info}"
             )
+            last_msg_content = ""
             async for msg in self._run_single(agent, prompt):
                 yield msg
-                running_context = f"{running_context}\n\n[{agent.name} 输出]\n{msg.content}"
+                if msg.final and msg.content:
+                    last_msg_content = msg.content
+            if last_msg_content:
+                running_context = f"{running_context}\n\n[{agent.name} 输出]\n{last_msg_content}"
             # 收集此 agent 的产物文件清单供后续 agent 参考
             agent_ws = self._workspace_root / self._agent_workspace_name(agent)
             if agent_ws.exists():
@@ -360,20 +468,35 @@ class AutoGenOrchestrator(OrchestratorBase):
         return cfg_agent.resolved_workspace() if cfg_agent else agent.name
 
     async def _run_single(self, agent, task: str) -> AsyncIterator[AgentMessage]:
-        from autogen_agentchat.messages import TextMessage  # type: ignore
-        from autogen_core import CancellationToken  # type: ignore
+        """流式跑单 agent：把工具调用、思考、token chunk 都推给 UI，pipeline 的每一阶段也走这条。"""
+        from autogen_agentchat.base import TaskResult  # type: ignore[import-not-found]
 
-        res = await agent.on_messages(
-            [TextMessage(content=task, source="user")],
-            cancellation_token=CancellationToken(),
-        )
-        msg = res.chat_message
-        yield AgentMessage(
-            agent=agent.name,
-            role="agent",
-            content=getattr(msg, "content", str(msg)),
-            final=True,
-        )
+        cur_role = next((a.role for a in self.config.agents if a.name == agent.name), "agent")
+        any_emitted = False
+        last_text: str | None = None
+        async for ev in agent.run_stream(task=task):
+            if isinstance(ev, TaskResult):
+                continue
+            text = self._stream_item_to_text(ev)
+            if not text:
+                continue
+            any_emitted = True
+            last_text = text
+            yield AgentMessage(agent=agent.name, role=cur_role, content=text)
+        if not any_emitted:
+            yield AgentMessage(
+                agent=agent.name,
+                role=cur_role,
+                content="（无输出：检查模型 key/网络/额度。）",
+                final=True,
+            )
+        else:
+            yield AgentMessage(
+                agent=agent.name,
+                role=cur_role,
+                content=last_text or "",
+                final=True,
+            )
 
 # --------------------------- Factory ---------------------------
 
@@ -385,8 +508,9 @@ def build_orchestrator(config: AppConfig, event_callback: Optional[Callable] = N
     except Exception as e:
         return MockOrchestrator(config, reason=f"AutoGen 未安装 ({e})")
 
+    merge = config.use_claude_code_settings
     for a in config.agents:
-        mc = config.get_model_for_agent(a)
+        mc = _effective_model_config_for_client(config.get_model_for_agent(a), merge)
         if mc.provider == "anthropic":
             try:
                 from autogen_ext.models.anthropic import AnthropicChatCompletionClient  # type: ignore # noqa: F401
@@ -395,7 +519,7 @@ def build_orchestrator(config: AppConfig, event_callback: Optional[Callable] = N
                     config,
                     reason=f"Agent `{a.name}` 使用 anthropic 但缺少依赖 ({e})",
                 )
-        if not mc.resolved_api_key() and mc.provider != "openai_compatible":
+        if not mc.resolved_api_key(merge) and mc.provider != "openai_compatible":
             return MockOrchestrator(
                 config,
                 reason=f"Agent `{a.name}` 的模型 `{mc.model}` 未配置 API Key",

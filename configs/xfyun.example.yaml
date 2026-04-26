@@ -1,0 +1,30 @@
+# 讯飞星汉 MaaS — OpenAI 兼容（chat/completions）。复制为 xfyun.secret.yaml 填入密钥后使用：
+#   magent-tui run -c configs/xfyun.secret.yaml --task "你好"
+# `xfyun.secret.yaml` 已加入 .gitignore，勿把真密钥提交进 git。
+
+project_name: m-agent-xfyun
+workspace_root: deliverables
+# 第三方网关勿与 ~/.claude 里模型混用
+use_claude_code_settings: false
+default_model: default
+
+models:
+  default:
+    provider: openai_compatible
+    model: astron-code-latest
+    base_url: https://maas-coding-api.cn-huabei-1.xf-yun.com/v2
+    api_key: "APPID:SECRET" # 控制台「APIKey」整段
+
+workflow:
+  mode: single
+  max_turns: 4
+  termination_keywords:
+    - TERMINATE
+
+agents:
+  - name: Assistant
+    role: 助手
+    workspace: Assistant
+    system_prompt: |
+      你是简洁助手。用户无进一步需求时用中文回复 TERMINATE 结束。
+    description: 单测模型连通

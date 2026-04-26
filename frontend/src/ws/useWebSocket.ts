@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { WsConnection, WS_URL } from "./connection";
+import { WsConnection, getWebSocketConnectUrl, subscribeWsMessage, subscribeWsStatus } from "./connection";
 import type { ClientMessage } from "@/types";
 
 interface UseWebSocketReturn {
   isConnected: boolean;
-  send: (msg: ClientMessage) => void;
+  send: (msg: ClientMessage) => boolean;
 }
 
 export function useWebSocket(onMessage: (data: unknown) => void): UseWebSocketReturn {
@@ -14,17 +14,20 @@ export function useWebSocket(onMessage: (data: unknown) => void): UseWebSocketRe
   onMessageRef.current = onMessage;
 
   useEffect(() => {
-    const conn = new WsConnection(
-      (data) => onMessageRef.current(data),
-      setIsConnected
-    );
+    const conn = new WsConnection();
     connRef.current = conn;
-    conn.connect(WS_URL);
-    return () => conn.close();
+    const unsubMsg = subscribeWsMessage((data: unknown) => onMessageRef.current(data));
+    const unsubStatus = subscribeWsStatus(setIsConnected);
+    conn.connect(getWebSocketConnectUrl());
+    return () => {
+      unsubMsg();
+      unsubStatus();
+      conn.close();
+    };
   }, []);
 
   const send = useCallback((msg: ClientMessage) => {
-    connRef.current?.send(msg);
+    return connRef.current?.send(msg) ?? false;
   }, []);
 
   return { isConnected, send };
